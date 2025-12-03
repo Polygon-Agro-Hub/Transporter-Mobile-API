@@ -90,3 +90,46 @@ exports.changePassword = async (officerId, currentPassword, newPassword) => {
     });
   });
 };
+
+// Get User Profile
+exports.getUserProfile = async (empId) => {
+  try {
+    const sql = `
+      SELECT 
+        empId,
+        firstNameEnglish,
+        lastNameEnglish,
+        phoneCode01,
+        phoneNumber01,
+        nic,
+        image,
+        createdAt
+      FROM collectionofficer
+      WHERE empId = ? 
+        AND status = "Approved"
+    `;
+
+    const [results] = await db.collectionofficer.promise().query(sql, [empId]);
+
+    if (results.length === 0) {
+      throw new Error("User not found");
+    }
+
+    const user = results[0];
+
+    return {
+      success: true,
+      empId: user.empId,
+      firstNameEnglish: user.firstNameEnglish || "",
+      lastNameEnglish: user.lastNameEnglish || "",
+      phoneCode01: user.phoneCode01 || "",
+      phoneNumber01: user.phoneNumber01 || "",
+      nic: user.nic || "",
+      email: user.email || "",
+      image: user.image || "",
+      createdAt: user.createdAt || "",
+    };
+  } catch (err) {
+    throw new Error("Database error: " + err.message);
+  }
+};

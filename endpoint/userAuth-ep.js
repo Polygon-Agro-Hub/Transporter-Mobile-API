@@ -65,6 +65,7 @@ exports.login = asyncHandler(async (req, res) => {
   }
 });
 
+// Change Password
 exports.changePassword = asyncHandler(async (req, res) => {
   const officerId = req.user.id;
   const { currentPassword, newPassword } = req.body;
@@ -102,6 +103,41 @@ exports.changePassword = asyncHandler(async (req, res) => {
     res.status(400).json({
       status: "error",
       message: error.message,
+    });
+  }
+});
+
+// Get User Profile
+exports.getProfile = asyncHandler(async (req, res) => {
+  try {
+    console.log("Getting profile for user:", req.user);
+    
+    // Use empId from the decoded token
+    const empId = req.user.empId;
+    
+    if (!empId) {
+      return res.status(400).json({
+        success: false,
+        message: "Employee ID not found in token"
+      });
+    }
+
+    console.log("Fetching profile for empId:", empId);
+    
+    const userProfile = await userDao.getUserProfile(empId);
+    
+    console.log("User profile fetched successfully");
+
+    return res.status(200).json({
+      success: true,
+      message: "User profile fetched successfully",
+      data: userProfile
+    });
+  } catch (err) {
+    console.error("Get profile failed:", err.message);
+    return res.status(404).json({ 
+      success: false, 
+      message: err.message 
     });
   }
 });
