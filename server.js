@@ -11,7 +11,7 @@ const {
 
 const app = express();
 
-const BASE_PATH = "/govilink";
+const BASE_PATH = "/transporter";
 
 const corsOptions = {
   origin: process.env.CLIENT_ORIGIN || "http://localhost:8081",
@@ -28,7 +28,7 @@ app.get([`${BASE_PATH}/health`, `${BASE_PATH}/healthz`], (req, res) => {
     status: "ok",
     timestamp: new Date(),
     uptime: process.uptime(),
-    service: "GoLink API",
+    service: "Transporter API",
     environment: process.env.NODE_ENV || "development",
   });
 });
@@ -56,9 +56,9 @@ DatabaseConnection(collectionofficer, "CollectionOfficer");
 DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
-// const userroute = require("./routes/user.routes.js");
+const userroute = require("./routes/userAuth-routes");
 
-// app.use(`${BASE_PATH}/api/auth`, userroute);
+app.use(`${BASE_PATH}/api/auth`, userroute);
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
