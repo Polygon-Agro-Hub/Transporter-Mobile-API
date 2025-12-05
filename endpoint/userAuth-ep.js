@@ -1,13 +1,13 @@
 const userDao = require("../dao/userAuth-dao");
 const jwt = require("jsonwebtoken");
-const { loginSchema} = require("../validations/userAuth-validations");
+const { loginSchema } = require("../validations/userAuth-validations");
 const asyncHandler = require("express-async-handler");
 
+// Login User
 exports.login = asyncHandler(async (req, res) => {
-  console.log("hit login")
-  // Validate request body using Joi
+  console.log("hit login");
   const { error } = loginSchema.validate(req.body, { abortEarly: false });
-  console.log(error)
+  console.log(error);
 
   if (error) {
     return res.status(400).json({
@@ -24,16 +24,18 @@ exports.login = asyncHandler(async (req, res) => {
     const result = await userDao.loginUser(empId, password);
     console.log("User login successful:", result);
 
- // Define JWT payload
+    // Define JWT payload
     const payload = {
       empId: result.empId,
       id: result.id,
       passwordUpdated: result.passwordUpdated,
-      iat: Math.floor(Date.now() / 1000)
+      iat: Math.floor(Date.now() / 1000),
     };
 
     // Create JWT token
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "8h" });
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: "8h",
+    });
 
     // Send token as HTTP-only cookie (more secure)
     res.cookie("authToken", token, {
@@ -51,7 +53,10 @@ exports.login = asyncHandler(async (req, res) => {
         empId: result.empId,
         id: result.id,
         token,
-        passwordUpdated: result.passwordUpdated
+        passwordUpdated: result.passwordUpdated,
+        firstNameEnglish: result.firstNameEnglish,
+        lastNameEnglish: result.lastNameEnglish,
+        image: result.image,
       },
     });
   } catch (err) {
@@ -60,14 +65,18 @@ exports.login = asyncHandler(async (req, res) => {
   }
 });
 
-
+// Change Password
 exports.changePassword = asyncHandler(async (req, res) => {
   const officerId = req.user.id;
   const { currentPassword, newPassword } = req.body;
   console.log("Hit change password");
 
   try {
-    const result = await userDao.changePassword(officerId, currentPassword, newPassword);
+    const result = await userDao.changePassword(
+      officerId,
+      currentPassword,
+      newPassword
+    );
     res.status(200).json({
       status: "success",
       message: result.message,
@@ -94,6 +103,41 @@ exports.changePassword = asyncHandler(async (req, res) => {
     res.status(400).json({
       status: "error",
       message: error.message,
+    });
+  }
+});
+
+// Get User Profile
+exports.getProfile = asyncHandler(async (req, res) => {
+  try {
+    console.log("Getting profile for user:", req.user);
+    
+    // Use empId from the decoded token
+    const empId = req.user.empId;
+    
+    if (!empId) {
+      return res.status(400).json({
+        success: false,
+        message: "Employee ID not found in token"
+      });
+    }
+
+    console.log("Fetching profile for empId:", empId);
+    
+    const userProfile = await userDao.getUserProfile(empId);
+    
+    console.log("User profile fetched successfully");
+
+    return res.status(200).json({
+      success: true,
+      message: "User profile fetched successfully",
+      data: userProfile
+    });
+  } catch (err) {
+    console.error("Get profile failed:", err.message);
+    return res.status(404).json({ 
+      success: false, 
+      message: err.message 
     });
   }
 });
