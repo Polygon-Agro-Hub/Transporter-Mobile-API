@@ -96,17 +96,21 @@ exports.getUserProfile = async (empId) => {
   try {
     const sql = `
       SELECT 
-        empId,
-        firstNameEnglish,
-        lastNameEnglish,
-        phoneCode01,
-        phoneNumber01,
-        nic,
-        image,
-        createdAt
-      FROM collectionofficer
-      WHERE empId = ? 
-        AND status = "Approved"
+        co.empId,
+        co.firstNameEnglish,
+        co.lastNameEnglish,
+        co.phoneCode01,
+        co.phoneNumber01,
+        co.nic,
+        co.email,
+        co.image,
+        co.createdAt,
+        vr.vType,
+        vr.vRegNo
+      FROM collectionofficer co
+      LEFT JOIN vehicleregistration vr ON co.id = vr.coId
+      WHERE co.empId = ? 
+        AND co.status = "Approved"
     `;
 
     const [results] = await db.collectionofficer.promise().query(sql, [empId]);
@@ -128,6 +132,8 @@ exports.getUserProfile = async (empId) => {
       email: user.email || "",
       image: user.image || "",
       createdAt: user.createdAt || "",
+      vType: user.vType || null,
+      vRegNo: user.vRegNo || null
     };
   } catch (err) {
     throw new Error("Database error: " + err.message);
