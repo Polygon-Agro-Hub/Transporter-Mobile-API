@@ -57,8 +57,10 @@ DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
 const userroute = require("./routes/userAuth-routes");
+const complainroute = require("./routes/complain-routes");
 
 app.use(`${BASE_PATH}/api/auth`, userroute);
+app.use(`${BASE_PATH}/api/complain`, complainroute);
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
