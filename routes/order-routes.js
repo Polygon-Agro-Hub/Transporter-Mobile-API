@@ -6,4 +6,7 @@ const orderEp = require('../endpoint/order-ep');
 // Assign Driver Orders
 router.post('/assign-driver-order', auth, orderEp.assignDriverOrder);
 
+// Get Driver's Order
+router.get('/get-driver-orders', auth, orderEp.GetDriverOrders);
+
 module.exports = router;
