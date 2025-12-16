@@ -1,6 +1,7 @@
 const complainDao = require("../dao/complain-dao");
 const asyncHandler = require("express-async-handler");
 
+// Add Complain
 exports.AddComplain = asyncHandler(async (req, res) => {
     if (!req.user || !req.user.id) {
         return res.status(401).json({
@@ -46,6 +47,7 @@ exports.AddComplain = asyncHandler(async (req, res) => {
     }
 });
 
+// Get Complain Categories
 exports.GetComplainCategories = asyncHandler(async (req, res) => {
     if (!req.user || !req.user.id) {
         return res.status(401).json({
@@ -72,6 +74,7 @@ exports.GetComplainCategories = asyncHandler(async (req, res) => {
     }
 });
 
+// Get My Complain
 exports.GetMyComplains = asyncHandler(async (req, res) => {
     if (!req.user || !req.user.id) {
         return res.status(401).json({

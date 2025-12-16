@@ -1,5 +1,6 @@
 const db = require("../startup/database");
 
+// Add Complain
 exports.AddComplain = async (driverId, complainCategory, complain) => {
     return new Promise((resolve, reject) => {
         // First, get the officer's empId
@@ -78,6 +79,7 @@ exports.AddComplain = async (driverId, complainCategory, complain) => {
     });
 };
 
+// Get Complain Categories
 exports.GetComplainCategories = async () => {
     return new Promise((resolve, reject) => {
         // First, get the appId for SalesDash
@@ -125,6 +127,7 @@ exports.GetComplainCategories = async () => {
     });
 };
 
+// Get My Complain
 // exports.GetMyComplains = async (driverId) => {
 //     return new Promise((resolve, reject) => {
 //         const sql = `
@@ -159,6 +162,7 @@ exports.GetComplainCategories = async () => {
 //     });
 // };
 
+// Get My Complains
 exports.GetMyComplains = async (driverId) => {
     return new Promise((resolve, reject) => {
         const sql = `
