@@ -12,4 +12,7 @@ router.get('/get-driver-orders', auth, orderEp.GetDriverOrders);
 // Get Order User Details
 router.get('/get-order-user-details', auth, orderEp.GetOrderUserDetails);
 
+// Start Journey
+router.post('/start-journey', auth, orderEp.StartJourney);
+
 module.exports = router;

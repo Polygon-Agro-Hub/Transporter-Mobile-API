@@ -223,3 +223,70 @@ exports.GetOrderUserDetails = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Start Journey
+exports.StartJourney = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const driverId = req.user.id;
+  const { orderIds } = req.body; 
+
+  try {
+    // Validate orderIds parameter
+    if (!orderIds) {
+      return res.status(400).json({
+        status: "error",
+        message: "orderIds parameter is required",
+      });
+    }
+
+    // Convert to array
+    let orderIdArray = [];
+    if (typeof orderIds === 'string') {
+      orderIdArray = orderIds.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+    } else if (Array.isArray(orderIds)) {
+      orderIdArray = orderIds.map(id => parseInt(id)).filter(id => !isNaN(id));
+    }
+
+    if (orderIdArray.length === 0) {
+      return res.status(400).json({
+        status: "error",
+        message: "Valid order IDs are required",
+      });
+    }
+
+    console.log("Starting journey for driver:", driverId, "with order IDs:", orderIdArray);
+
+    // Start the journey
+    const result = await orderDao.startJourneyDAO(
+      driverId,
+      orderIdArray
+    );
+
+    if (result.success) {
+      res.status(200).json({
+        status: "success",
+        message: result.message,
+        data: {
+          updatedOrders: result.updatedOrders
+        }
+      });
+    } else {
+      res.status(400).json({
+        status: "error",
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error("Error starting journey:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to start journey",
+    });
+  }
+});

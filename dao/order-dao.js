@@ -26,74 +26,74 @@ exports.GetProcessOrderIdByInvNo = async (invNo) => {
 };
 
 // Save driver order and update processorders status
-exports.SaveDriverOrder = async (driverId, orderId, handOverTime) => {
+exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
   return new Promise(async (resolve, reject) => {
     try {
       console.log("Saving driver order with:", {
         driverId,
-        orderId,
+        processOrderId,
         handOverTime,
       });
 
-      // Step 1: Insert into driverorders
+      // STEP 1: Insert into driverorders
       const insertSql = `
-                INSERT INTO collection_officer.driverorders 
-                (driverId, orderId, handOverTime, drvStatus, isHandOver, createdAt) 
-                VALUES (?, ?, ?, 'Todo', 0, NOW())
-            `;
+        INSERT INTO collection_officer.driverorders 
+        (driverId, orderId, handOverTime, drvStatus, isHandOver, createdAt) 
+        VALUES (?, ?, ?, 'Todo', 0, NOW())
+      `;
 
-      // Insert driver order
-      const insertResult = await new Promise((insertResolve, insertReject) => {
+      const insertResult = await new Promise((res, rej) => {
         db.collectionofficer.query(
           insertSql,
-          [driverId, orderId, handOverTime],
+          [driverId, processOrderId, handOverTime],
           (err, result) => {
             if (err) {
-              console.error(
-                "Database error inserting driver order:",
-                err.message
-              );
-              return insertReject(new Error("Failed to insert driver order"));
+              console.error("Insert error:", err.message);
+              return rej(err);
             }
-            insertResolve(result);
+            console.log("Driver order inserted:", result.insertId);
+            res(result);
           }
         );
       });
 
-      // Step 2: Update processorders status to 'Collected'
+      // STEP 2: Update processorders (FIXED)
       const updateSql = `
-                UPDATE market_place.processorders 
-                SET status = 'Collected',
-                    isTargetAssigned = 1
-                WHERE orderId = ?
-            `;
+        UPDATE market_place.processorders 
+        SET status = 'Collected',
+            isTargetAssigned = 1
+        WHERE id = ?
+      `;
 
-      // Update process order status
-      const updateResult = await new Promise((updateResolve, updateReject) => {
-        db.marketPlace.query(updateSql, [orderId], (err, result) => {
+      const updateResult = await new Promise((res, rej) => {
+        db.marketPlace.query(updateSql, [processOrderId], (err, result) => {
           if (err) {
-            console.error(
-              "Database error updating process order:",
-              err.message
-            );
-            return updateReject(
-              new Error("Failed to update process order status")
+            console.error("Update error:", err.message);
+            return rej(err);
+          }
+
+          console.log("Process order update result:", result);
+
+          if (result.affectedRows === 0) {
+            console.warn(
+              "No processorders row updated. Invalid processOrderId:",
+              processOrderId
             );
           }
-          updateResolve(result);
+
+          res(result);
         });
       });
 
       resolve({
         message: "Order assigned successfully and status updated to Collected",
         driverOrderId: insertResult.insertId,
-        handOverTime: handOverTime,
-        processOrderId: orderId,
+        processOrderId,
         status: "Collected",
       });
     } catch (error) {
-      console.error("Error in SaveDriverOrder:", error.message);
-      reject(new Error("Failed to assign order: " + error.message));
+      console.error("SaveDriverOrder failed:", error);
+      reject(error);
     }
   });
 };
@@ -183,7 +183,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         MIN(do.orderId) as orderId,
         (SELECT do2.drvStatus 
          FROM collection_officer.driverorders do2
-         INNER JOIN market_place.processorders po2 ON do2.orderId = po2.id
+         INNER JOIN market_place.processorders po2 ON do2.orderId = po2.orderId  -- Changed: po2.orderId
          INNER JOIN market_place.orders o2 ON po2.orderId = o2.id
          WHERE do2.driverId = do.driverId 
          AND o2.fullName = o.fullName
@@ -217,7 +217,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         MIN(u.phoneNumber) as phoneNumber,
         MIN(u.image) as image
       FROM collection_officer.driverorders do
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN market_place.processorders po ON do.orderId = po.orderId  -- Changed: po.orderId
       INNER JOIN market_place.orders o ON po.orderId = o.id
       INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
       WHERE do.driverId = ?
@@ -244,6 +244,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
     db.collectionofficer.query(sql, params, (err, results) => {
       if (err) {
         console.error("Database error fetching driver orders:", err.message);
+        console.error("SQL:", sql);
         return reject(new Error("Failed to fetch driver orders"));
       }
 
@@ -334,14 +335,14 @@ exports.getOrderUserDetailsDAO = async (driverId, orderIds) => {
           ELSE 'Address not specified'
         END as userAddress
       FROM collection_officer.driverorders do
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
-      INNER JOIN market_place.orders o ON po.orderId = o.id
+      INNER JOIN market_place.processorders po ON do.orderId = po.orderId  -- Changed: do.orderId = po.orderId
+      INNER JOIN market_place.orders o ON po.orderId = o.id  -- po.orderId = o.id
       INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
       -- Get address from first order (use LEFT JOIN and group by user)
       LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
       LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
       WHERE do.driverId = ?
-      AND do.orderId IN (?)
+      AND do.orderId IN (?)  -- This is driverorders.orderId which should match processorders.orderId
       ORDER BY o.id
     `;
 
@@ -407,6 +408,120 @@ exports.getOrderUserDetailsDAO = async (driverId, orderIds) => {
       resolve({
         user,
         orders,
+      });
+    });
+  });
+};
+
+// Start Journey DAO
+exports.startJourneyDAO = async (driverId, orderIds) => {
+  return new Promise((resolve, reject) => {
+    // First, check if driver already has an order with "On the way" status
+    const checkSql = `
+      SELECT COUNT(*) as ongoingCount
+      FROM collection_officer.driverorders
+      WHERE driverId = ?
+      AND drvStatus = 'On the way'
+      AND isHandOver = 0
+    `;
+
+    db.collectionofficer.query(checkSql, [driverId], (checkErr, checkResults) => {
+      if (checkErr) {
+        console.error("Database error checking ongoing orders:", checkErr.message);
+        return reject(new Error("Failed to check ongoing orders"));
+      }
+
+      const ongoingCount = checkResults[0]?.ongoingCount || 0;
+      
+      if (ongoingCount > 0) {
+        return resolve({
+          success: false,
+          message: "You have one ongoing activity. Please end it, put it on hold, or mark it as returned to start this one."
+        });
+      }
+
+      // Update driverorders table
+      const updateDriverOrdersSql = `
+        UPDATE collection_officer.driverorders
+        SET drvStatus = 'On the way',
+            createdAt = CURRENT_TIMESTAMP
+        WHERE driverId = ?
+        AND orderId IN (?)
+        AND isHandOver = 0
+      `;
+
+      console.log("Updating driverorders with SQL:", updateDriverOrdersSql);
+      console.log("Parameters:", [driverId, orderIds]);
+
+      db.collectionofficer.query(updateDriverOrdersSql, [driverId, orderIds], (err1, result1) => {
+        if (err1) {
+          console.error("Error updating driverorders:", err1.message);
+          return reject(new Error("Failed to update driver orders"));
+        }
+
+        console.log("Driver orders updated. Affected rows:", result1.affectedRows);
+
+        // Update processorders table
+        const updateProcessOrdersSql = `
+          UPDATE market_place.processorders
+          SET status = 'On the way'
+          WHERE orderId IN (?)
+        `;
+
+        console.log("Updating processorders with SQL:", updateProcessOrdersSql);
+        console.log("Parameters:", [orderIds]);
+
+        db.collectionofficer.query(updateProcessOrdersSql, [orderIds], (err2, result2) => {
+          if (err2) {
+            console.error("Error updating processorders:", err2.message);
+            return reject(new Error("Failed to update process orders"));
+          }
+
+          console.log("Process orders updated. Affected rows:", result2.affectedRows);
+
+          // Get updated order details for response
+          const getUpdatedOrdersSql = `
+            SELECT 
+              do.id as driverOrderId,
+              do.orderId as processOrderId,
+              po.orderId as marketOrderId,
+              po.invNo,
+              po.status as processStatus,
+              do.drvStatus,
+              do.createdAt as journeyStartedAt
+            FROM collection_officer.driverorders do
+            INNER JOIN market_place.processorders po ON do.orderId = po.id
+            WHERE do.driverId = ?
+            AND do.orderId IN (?)
+            AND do.drvStatus = 'On the way'
+          `;
+
+          db.collectionofficer.query(getUpdatedOrdersSql, [driverId, orderIds], (err3, updatedResults) => {
+            if (err3) {
+              console.error("Error fetching updated orders:", err3.message);
+              // Still resolve success since the updates worked
+              return resolve({
+                success: true,
+                message: "Journey started successfully",
+                updatedOrders: []
+              });
+            }
+
+            resolve({
+              success: true,
+              message: "Journey started successfully",
+              updatedOrders: updatedResults.map(row => ({
+                driverOrderId: row.driverOrderId,
+                processOrderId: row.processOrderId,
+                marketOrderId: row.marketOrderId,
+                invNo: row.invNo,
+                processStatus: row.processStatus,
+                drvStatus: row.drvStatus,
+                journeyStartedAt: row.journeyStartedAt
+              }))
+            });
+          });
+        });
       });
     });
   });
