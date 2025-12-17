@@ -157,3 +157,69 @@ exports.GetDriverOrders = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Get Order User Details
+exports.GetOrderUserDetails = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const driverId = req.user.id;
+  const { orderIds } = req.query;
+
+  try {
+    // Validate orderIds parameter
+    if (!orderIds) {
+      return res.status(400).json({
+        status: "error",
+        message: "orderIds parameter is required",
+      });
+    }
+
+    console.log("Received orderIds:", orderIds);
+
+    // Convert comma-separated string to array
+    let orderIdArray = [];
+    if (typeof orderIds === 'string') {
+      orderIdArray = orderIds.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+    } else if (Array.isArray(orderIds)) {
+      orderIdArray = orderIds.map(id => parseInt(id)).filter(id => !isNaN(id));
+    }
+
+    if (orderIdArray.length === 0) {
+      return res.status(400).json({
+        status: "error",
+        message: "Valid order IDs are required",
+      });
+    }
+
+    // Fetch user and order details
+    const result = await orderDao.getOrderUserDetailsDAO(
+      driverId,
+      orderIdArray
+    );
+
+      console.log(JSON.stringify(result, null, 2));
+
+    if (!result || !result.user) {
+      return res.status(404).json({
+        status: "error",
+        message: "No user or orders found",
+      });
+    }
+
+    res.status(200).json({
+      status: "success",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching order user details:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to fetch order details",
+    });
+  }
+});

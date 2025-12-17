@@ -9,4 +9,7 @@ router.post('/assign-driver-order', auth, orderEp.assignDriverOrder);
 // Get Driver's Order
 router.get('/get-driver-orders', auth, orderEp.GetDriverOrders);
 
+// Get Order User Details
+router.get('/get-order-user-details', auth, orderEp.GetOrderUserDetails);
+
 module.exports = router;
