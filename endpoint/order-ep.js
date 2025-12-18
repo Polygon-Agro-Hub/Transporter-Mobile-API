@@ -1,5 +1,6 @@
 const orderDao = require("../dao/order-dao");
 const asyncHandler = require("express-async-handler");
+const uploadFileToS3 = require("../middlewares/s3upload");
 
 // Assign Driver Order
 exports.assignDriverOrder = asyncHandler(async (req, res) => {
@@ -287,6 +288,91 @@ exports.StartJourney = asyncHandler(async (req, res) => {
     res.status(500).json({
       status: "error",
       message: "Failed to start journey",
+    });
+  }
+});
+
+// Save Signature 
+exports.saveSignature = asyncHandler(async (req, res) => {
+  try {
+    // Get driver ID from token
+    const driverId = req.user.id;
+    
+    if (!driverId) {
+      return res.status(401).json({
+        status: "error",
+        message: "Unauthorized: Driver authentication required"
+      });
+    }
+
+    // Get process order IDs from request body
+    const { processOrderIds } = req.body;
+
+    if (!processOrderIds || !Array.isArray(processOrderIds) || processOrderIds.length === 0) {
+      return res.status(400).json({
+        status: "error",
+        message: "processOrderIds array is required"
+      });
+    }
+
+    // Check if signature file is uploaded
+    if (!req.file) {
+      return res.status(400).json({
+        status: "error",
+        message: "Signature image is required"
+      });
+    }
+
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png'];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        status: "error",
+        message: "Only JPEG, JPG, and PNG images are allowed"
+      });
+    }
+
+    // Verify driver has access to these orders
+    const verification = await orderDao.verifyDriverAccessToOrdersDAO(driverId, processOrderIds);
+    
+    if (!verification.hasAccess) {
+      return res.status(403).json({
+        status: "error",
+        message: `You don't have access to all requested orders. Accessible: ${verification.accessibleCount}/${verification.totalRequested}`
+      });
+    }
+
+    // Upload signature image to S3/R2
+    const signatureUrl = await uploadFileToS3(
+      req.file.buffer,
+      req.file.originalname,
+      "signatures" 
+    );
+
+    // Save signature and update order statuses
+    const result = await orderDao.saveSignatureAndUpdateStatusDAO(
+      processOrderIds,
+      signatureUrl,
+      driverId
+    );
+
+    res.status(200).json({
+      status: "success",
+      message: "Signature saved and orders marked as delivered successfully",
+      data: {
+        signatureUrl: result.signatureUrl,
+        driverOrdersUpdated: result.driverOrdersUpdated,
+        processOrdersUpdated: result.processOrdersUpdated,
+        updatedOrders: result.updatedOrders,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error("Error in saveSignature endpoint:", error);
+    res.status(500).json({
+      status: "error",
+      message: error.message || "Failed to save signature and update orders"
     });
   }
 });

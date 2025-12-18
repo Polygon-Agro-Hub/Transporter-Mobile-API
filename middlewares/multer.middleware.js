@@ -30,9 +30,9 @@ const errorsHandler = (err, req, res, next) => {
         .send("File is too large. Maximum allowed size is 5MB.");
     }
   } else if (err) {
-    return res.status(400).send(err.message); // Handle other validation errors
+    return res.status(400).send(err.message); 
   }
   next();
 };
 
-module.exports = upload; // Export both upload and error handler]
+module.exports = { upload };
