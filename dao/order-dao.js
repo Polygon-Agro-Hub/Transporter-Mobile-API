@@ -35,7 +35,30 @@ exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
         handOverTime,
       });
 
-      // STEP 1: Insert into driverorders
+      // STEP 1: Get the orderId from processorders
+      const getOrderSql = `
+        SELECT orderId 
+        FROM market_place.processorders 
+        WHERE id = ?
+        LIMIT 1
+      `;
+
+      const processOrder = await new Promise((res, rej) => {
+        db.marketPlace.query(getOrderSql, [processOrderId], (err, results) => {
+          if (err) {
+            console.error("Error fetching process order:", err.message);
+            return rej(err);
+          }
+          if (results.length === 0) {
+            return rej(new Error("Process order not found"));
+          }
+          res(results[0]);
+        });
+      });
+
+      const marketOrderId = processOrder.orderId;
+
+      // STEP 2: Insert into driverorders with market_place.orders.id
       const insertSql = `
         INSERT INTO collection_officer.driverorders 
         (driverId, orderId, handOverTime, drvStatus, isHandOver, createdAt) 
@@ -45,19 +68,20 @@ exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
       const insertResult = await new Promise((res, rej) => {
         db.collectionofficer.query(
           insertSql,
-          [driverId, processOrderId, handOverTime],
+          [driverId, marketOrderId, handOverTime],
           (err, result) => {
             if (err) {
               console.error("Insert error:", err.message);
               return rej(err);
             }
             console.log("Driver order inserted:", result.insertId);
+            console.log("Saved with market order ID:", marketOrderId);
             res(result);
           }
         );
       });
 
-      // STEP 2: Update processorders (FIXED)
+      // STEP 3: Update processorders
       const updateSql = `
         UPDATE market_place.processorders 
         SET status = 'Collected',
@@ -89,6 +113,7 @@ exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
         message: "Order assigned successfully and status updated to Collected",
         driverOrderId: insertResult.insertId,
         processOrderId,
+        marketOrderId: marketOrderId,
         status: "Collected",
       });
     } catch (error) {
@@ -109,7 +134,8 @@ exports.CheckOrderAlreadyAssigned = async (orderId, driverId) => {
                 CONCAT(co.firstNameEnglish, ' ', co.lastNameEnglish) as assignedDriverName
             FROM collection_officer.driverorders do
             INNER JOIN collection_officer.collectionofficer co ON do.driverId = co.id
-            WHERE do.orderId = ?
+            INNER JOIN market_place.processorders po ON do.orderId = po.orderId
+            WHERE po.id = ?  -- Now checking by processorders.id
             LIMIT 1
         `;
 
