@@ -484,3 +484,150 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
     );
   });
 };
+
+// Save Signature DAO
+exports.saveSignatureAndUpdateStatusDAO = async (
+  processOrderIds,
+  signaturePath
+) => {
+  return new Promise((resolve, reject) => {
+    // Use the collectionofficer pool to get a connection
+    db.collectionofficer.getConnection((err, connection) => {
+      if (err) {
+        console.error("Error getting database connection:", err);
+        return reject(
+          new Error(`Failed to get database connection: ${err.message}`)
+        );
+      }
+
+      // Start transaction
+      connection.beginTransaction((beginErr) => {
+        if (beginErr) {
+          connection.release();
+          return reject(
+            new Error(`Failed to begin transaction: ${beginErr.message}`)
+          );
+        }
+
+        // 1. Update driverorders table - set signature and drvStatus
+        const updateDriverOrdersQuery = `
+          UPDATE driverorders 
+          SET signature = ?, drvStatus = 'Completed'
+          WHERE orderId IN (?)
+        `;
+
+        console.log("Updating driverorders with signature:", {
+          processOrderIds: processOrderIds,
+          signaturePath: signaturePath,
+        });
+
+        // Execute the first update
+        connection.query(
+          updateDriverOrdersQuery,
+          [signaturePath, processOrderIds],
+          (queryErr1, result1) => {
+            if (queryErr1) {
+              return connection.rollback(() => {
+                connection.release();
+                console.error("Error updating driverorders:", queryErr1);
+                reject(
+                  new Error(
+                    `Failed to update driverorders: ${queryErr1.message}`
+                  )
+                );
+              });
+            }
+
+            // 2. Update processorders table - set status to 'Delivered'
+            const updateProcessOrdersQuery = `
+            UPDATE market_place.processorders 
+            SET status = 'Delivered'
+            WHERE id IN (?)
+          `;
+
+            // Use the same connection but specify the database in the query
+            connection.query(
+              updateProcessOrdersQuery,
+              [processOrderIds],
+              (queryErr2, result2) => {
+                if (queryErr2) {
+                  return connection.rollback(() => {
+                    connection.release();
+                    console.error("Error updating processorders:", queryErr2);
+                    reject(
+                      new Error(
+                        `Failed to update processorders: ${queryErr2.message}`
+                      )
+                    );
+                  });
+                }
+
+                // Commit transaction
+                connection.commit((commitErr) => {
+                  if (commitErr) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      console.error("Error committing transaction:", commitErr);
+                      reject(
+                        new Error(
+                          `Failed to commit transaction: ${commitErr.message}`
+                        )
+                      );
+                    });
+                  }
+
+                  connection.release();
+
+                  console.log("Signature update successful:", {
+                    driverOrdersUpdated: result1.affectedRows,
+                    processOrdersUpdated: result2.affectedRows,
+                    totalOrders: processOrderIds.length,
+                  });
+
+                  resolve({
+                    driverOrdersUpdated: result1.affectedRows,
+                    processOrdersUpdated: result2.affectedRows,
+                    totalOrders: processOrderIds.length,
+                  });
+                });
+              }
+            );
+          }
+        );
+      });
+    });
+  });
+};
+
+// Verify Driver Has Access To The Process Orders
+exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT COUNT(*) as count
+      FROM collection_officer.driverorders 
+      WHERE driverId = ? 
+        AND orderId IN (?)
+        AND drvStatus IN ('Todo', 'On the way', 'Hold')
+    `;
+
+    db.collectionofficer.query(
+      sql,
+      [driverId, processOrderIds],
+      (err, results) => {
+        if (err) {
+          console.error("Error verifying driver access:", err.message);
+          return reject(new Error("Failed to verify driver access"));
+        }
+
+        const accessibleCount = results[0].count;
+        const totalRequested = processOrderIds.length;
+
+        resolve({
+          hasAccess: accessibleCount === totalRequested,
+          accessibleCount: accessibleCount,
+          totalRequested: totalRequested,
+        });
+      }
+    );
+  });
+};
