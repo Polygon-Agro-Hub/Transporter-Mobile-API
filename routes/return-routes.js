@@ -9,7 +9,4 @@ router.get('/reason', auth, returnEp.getReason);
 // Submit Return Order
 router.post('/submit', auth, returnEp.submitReturn);
 
-
-router.get('/get-invoice/:orderId', auth, returnEp.getInvoiceNumber);
-
 module.exports = router;
