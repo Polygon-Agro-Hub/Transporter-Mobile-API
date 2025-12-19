@@ -30,124 +30,38 @@ exports.getReason = asyncHandler(async (req, res) => {
 });
 
 
-// exports.submitHold = asyncHandler(async (req, res) => {
-//     if (!req.user || !req.user.id) {
-//         return res.status(401).json({
-//             status: "error",
-//             message: "Unauthorized: User authentication required"
-//         });
-//     }
-
-//     const { orderIds, holdReasonId, note } = req.body;
-
-//     // Validation: Check if orderIds is provided and is an array
-//     if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
-//         return res.status(400).json({
-//             status: "error",
-//             message: "Order IDs are required and must be a non-empty array"
-//         });
-//     }
-
-//     // Validation: Check if holdReasonId is provided
-//     if (!holdReasonId) {
-//         return res.status(400).json({
-//             status: "error",
-//             message: "Return reason ID is required"
-//         });
-//     }
-
-//     // Validation: Ensure holdReasonId is a valid number
-//     if (isNaN(holdReasonId) || holdReasonId <= 0) {
-//         return res.status(400).json({
-//             status: "error",
-//             message: "Invalid return reason ID"
-//         });
-//     }
-
-//     // Validation: Ensure all orderIds are valid numbers
-//     const invalidOrderIds = orderIds.filter(id => isNaN(id) || id <= 0);
-//     if (invalidOrderIds.length > 0) {
-//         return res.status(400).json({
-//             status: "error",
-//             message: "Invalid order IDs provided"
-//         });
-//     }
-
-//     try {
-//         // Submit the return order
-//         const result = await holdDao.submitHold({
-//             orderIds,
-//             holdReasonId: parseInt(holdReasonId),
-//             note: note && note.trim() ? note.trim() : null,
-//             userId: req.user.id
-//         });
-
-//         res.status(200).json({
-//             status: "success",
-//             message: "Return order submitted successfully",
-//             data: {
-//                 processOrdersUpdated: result.processOrdersUpdated,
-//                 driverOrdersUpdated: result.driverOrdersUpdated,
-//                 returnOrdersInserted: result.returnOrdersInserted,
-//                 orderIds: orderIds
-//             }
-//         });
-//     } catch (error) {
-//         console.error("Error submitting return order:", error.message);
-
-//         // Check for specific error types
-//         if (error.message.includes("No orders found")) {
-//             return res.status(404).json({
-//                 status: "error",
-//                 message: "No orders found with the provided IDs"
-//             });
-//         }
-
-//         if (error.message.includes("No driver orders found")) {
-//             return res.status(404).json({
-//                 status: "error",
-//                 message: "No driver orders found for the provided order IDs"
-//             });
-//         }
-
-//         res.status(500).json({
-//             status: "error",
-//             message: error.message || "Failed to submit return order. Please try again.",
-//         });
-//     }
-// });
 
 exports.submitHold = asyncHandler(async (req, res) => {
     if (!req.user || !req.user.id) {
         return res.status(401).json({
             status: "error",
-            message: "Unauthorized: User authentication required"
+            message: "Unauthorized: User authentication required",
         });
     }
 
-    // Use Joi validation from validation file
+    // Validate request body using Joi schema
     const { error, value } = submitHoldSchema.validate(req.body, {
-        abortEarly: false
+        abortEarly: false,
     });
 
     if (error) {
-        const errorMessages = error.details.map(detail => detail.message);
+        const errors = error.details.map((detail) => detail.message);
         return res.status(400).json({
             status: "error",
             message: "Validation failed",
-            errors: errorMessages
+            errors: errors,
         });
     }
 
     const { orderIds, holdReasonId, note } = value;
 
     try {
-        // Submit the hold order
+        // Submit the return order
         const result = await holdDao.submitHold({
             orderIds,
-            holdReasonId: parseInt(holdReasonId),
-            note: note && note.trim() ? note.trim() : null,
-            userId: req.user.id
+            holdReasonId,
+            note: note || null,
+            userId: req.user.id,
         });
 
         res.status(200).json({
@@ -157,31 +71,33 @@ exports.submitHold = asyncHandler(async (req, res) => {
                 processOrdersUpdated: result.processOrdersUpdated,
                 driverOrdersUpdated: result.driverOrdersUpdated,
                 returnOrdersInserted: result.returnOrdersInserted,
-                orderIds: orderIds
-            }
+                orderIds: orderIds,
+                invoiceNumbers: result.invoiceNumbers || [],
+                orderDetails: result.orderDetails || [],
+            },
         });
     } catch (error) {
-        console.error("Error submitting hold order:", error.message);
+        console.error("Error submitting return order:", error.message);
 
         // Check for specific error types
         if (error.message.includes("No orders found")) {
             return res.status(404).json({
                 status: "error",
-                message: "No orders found with the provided IDs"
+                message: "No orders found with the provided IDs",
             });
         }
 
         if (error.message.includes("No driver orders found")) {
             return res.status(404).json({
                 status: "error",
-                message: "No driver orders found for the provided order IDs"
+                message: "No driver orders found for the provided order IDs",
             });
         }
 
         res.status(500).json({
             status: "error",
-            message: error.message || "Failed to submit hold order. Please try again.",
+            message:
+                error.message || "Failed to submit return order. Please try again.",
         });
     }
 });
-
