@@ -9,4 +9,7 @@ router.get('/reason', auth, returnEp.getReason);
 // Submit Return Order
 router.post('/submit', auth, returnEp.submitReturn);
 
+// Get Driver's Return Orders
+router.get('/get-driver-return-orders', auth, returnEp.GetDriverReturnOrders);
+
 module.exports = router;

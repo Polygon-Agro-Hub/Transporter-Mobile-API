@@ -473,3 +473,247 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
     });
   });
 };
+
+// Get Driver's Return Orders
+exports.getDriverReturnOrdersDAO = async (driverId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT 
+        do.id as driverOrderId,
+        do.drvStatus,
+        do.isHandOver,
+        do.createdAt as driverOrderCreatedAt,
+        
+        -- Process Order Details
+        po.id as processOrderId,
+        po.invNo,
+        po.amount,
+        po.isPaid,
+        po.status as processStatus,
+        po.paymentMethod,
+        
+        -- Order Details
+        o.id as orderId,
+        o.title as orderTitle,
+        o.fullName,
+        o.phone1,
+        o.phonecode1,
+        o.phone2,
+        o.phonecode2,
+        o.sheduleTime,
+        o.buildingType,
+        o.total,
+        o.fullTotal,
+        
+        -- User Details
+        u.id as userId,
+        u.title as userTitle,
+        u.firstName,
+        u.lastName,
+        u.phoneCode,
+        u.phoneNumber,
+        u.image,
+        
+        -- Get the latest return reason details
+        dro.note as returnNote,
+        dro.createdAt as returnCreatedAt,
+        rr.rsnEnglish as returnReasonEnglish,
+        rr.rsnSinhala as returnReasonSinhala,
+        rr.rsnTamil as returnReasonTamil,
+        rr.id as returnReasonId,
+        
+        -- Address Details (House)
+        oh.houseNo as house_houseNo,
+        oh.streetName as house_streetName,
+        oh.city as house_city,
+        
+        -- Address Details (Apartment)
+        oa.buildingNo as apartment_buildingNo,
+        oa.buildingName as apartment_buildingName,
+        oa.unitNo as apartment_unitNo,
+        oa.floorNo as apartment_floorNo,
+        oa.houseNo as apartment_houseNo,
+        oa.streetName as apartment_streetName,
+        oa.city as apartment_city
+        
+      FROM collection_officer.driverorders do
+      
+      -- Join with processorders
+      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      
+      -- Join with orders
+      INNER JOIN market_place.orders o ON po.orderId = o.id
+      
+      -- Join with marketplaceusers
+      INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
+      
+      -- LEFT JOIN with the LATEST driverreturnorders using a subquery
+      LEFT JOIN (
+        SELECT drvOrderId, note, returnReasonId, createdAt,
+               ROW_NUMBER() OVER (PARTITION BY drvOrderId ORDER BY createdAt DESC) as rn
+        FROM collection_officer.driverreturnorders
+      ) dro_latest ON do.id = dro_latest.drvOrderId AND dro_latest.rn = 1
+      
+      -- LEFT JOIN with returnreason using the latest return order
+      LEFT JOIN collection_officer.returnreason rr ON dro_latest.returnReasonId = rr.id
+      
+      -- LEFT JOIN the actual driverreturnorders for all fields
+      LEFT JOIN collection_officer.driverreturnorders dro ON dro_latest.drvOrderId = dro.drvOrderId 
+        AND dro_latest.createdAt = dro.createdAt
+        AND dro_latest.returnReasonId = dro.returnReasonId
+      
+      -- LEFT JOIN with address tables
+      LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
+      LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
+      
+      WHERE do.driverId = ?
+        AND do.drvStatus = 'Return'
+        AND (do.isHandOver = 0 OR do.isHandOver IS NULL)
+        
+      ORDER BY do.createdAt DESC, po.id DESC
+    `;
+
+    const params = [driverId];
+
+    console.log("Fetching return orders for driver ID:", driverId);
+
+    db.collectionofficer.query(sql, params, (err, results) => {
+      if (err) {
+        console.error("Database error fetching driver return orders:", err.message);
+        console.error("SQL:", sql);
+        console.error("Params:", params);
+        return reject(new Error("Failed to fetch driver return orders"));
+      }
+
+      console.log(`Found ${results.length} return orders for driver ${driverId}`);
+
+      // Use a Map to store unique driver orders (based on driverOrderId)
+      const uniqueOrdersMap = new Map();
+      
+      results.forEach((row) => {
+        // If we haven't seen this driverOrderId yet, add it to the map
+        if (!uniqueOrdersMap.has(row.driverOrderId)) {
+          uniqueOrdersMap.set(row.driverOrderId, row);
+        }
+      });
+      
+      // Convert map values to array
+      const uniqueResults = Array.from(uniqueOrdersMap.values());
+      
+      console.log(`After deduplication: ${uniqueResults.length} unique return orders`);
+
+      if (uniqueResults.length > 0) {
+        console.log("Sample unique return order data:", {
+          driverOrderId: uniqueResults[0].driverOrderId,
+          drvStatus: uniqueResults[0].drvStatus,
+          isHandOver: uniqueResults[0].isHandOver,
+          processOrderId: uniqueResults[0].processOrderId,
+          invNo: uniqueResults[0].invNo,
+          returnReasonEnglish: uniqueResults[0].returnReasonEnglish,
+          returnNote: uniqueResults[0].returnNote
+        });
+      }
+
+      // Format the results
+      const formattedResults = uniqueResults.map((row) => {
+        // Format address based on building type
+        let formattedAddress = "No Address";
+        if (row.buildingType === 'House') {
+          const parts = [
+            row.house_houseNo,
+            row.house_streetName,
+            row.house_city
+          ].filter(Boolean);
+          formattedAddress = parts.join(', ') || "No Address";
+        } else if (row.buildingType === 'Apartment') {
+          const parts = [
+            row.apartment_buildingNo ? `Building ${row.apartment_buildingNo}` : null,
+            row.apartment_buildingName,
+            row.apartment_unitNo ? `Unit ${row.apartment_unitNo}` : null,
+            row.apartment_floorNo ? `Floor ${row.apartment_floorNo}` : null,
+            row.apartment_houseNo,
+            row.apartment_streetName,
+            row.apartment_city
+          ].filter(Boolean);
+          formattedAddress = parts.join(', ') || "No Address";
+        }
+
+        // Determine return reason text (use the latest one)
+        let returnReasonText = "";
+        if (row.returnReasonEnglish) {
+          returnReasonText = row.returnReasonEnglish;
+        } else if (row.returnNote) {
+          returnReasonText = row.returnNote;
+        } else {
+          returnReasonText = "No reason specified";
+        }
+
+        // Get customer full name (prefer order.fullName, fallback to user details)
+        const customerName = row.fullName || `${row.firstName || ""} ${row.lastName || ""}`.trim() || "Customer";
+        
+        // Get title (prefer order.title, fallback to user.title)
+        const customerTitle = row.orderTitle || row.userTitle || "";
+
+        // Format the return order
+        const formattedOrder = {
+          driverOrderId: row.driverOrderId,
+          processOrderId: row.processOrderId,
+          orderId: row.orderId,
+          userId: row.userId,
+          
+          // Invoice and payment details
+          invoiceNumber: row.invNo,
+          amount: row.amount,
+          totalAmount: row.fullTotal || row.total,
+          isPaid: row.isPaid === 1,
+          paymentMethod: row.paymentMethod,
+          processStatus: row.processStatus,
+          
+          // Customer details
+          customer: {
+            title: customerTitle,
+            fullName: customerName,
+            nameWithTitle: customerTitle ? `${customerTitle}. ${customerName}` : customerName,
+            phoneCode: row.phonecode1 || row.phoneCode,
+            phoneNumber: row.phone1 || row.phoneNumber,
+            secondaryPhoneCode: row.phonecode2,
+            secondaryPhone: row.phone2,
+            image: row.image
+          },
+          
+          // Return details (latest one only)
+          returnDetails: {
+            reason: returnReasonText,
+            reasonEnglish: row.returnReasonEnglish,
+            reasonSinhala: row.returnReasonSinhala,
+            reasonTamil: row.returnReasonTamil,
+            note: row.returnNote,
+            returnReasonId: row.returnReasonId,
+            createdAt: row.returnCreatedAt
+          },
+          
+          // Delivery details
+          scheduleTime: row.sheduleTime,
+          buildingType: row.buildingType,
+          address: formattedAddress,
+          
+          // Status
+          drvStatus: row.drvStatus,
+          isHandOver: row.isHandOver === 1,
+          driverOrderCreatedAt: row.driverOrderCreatedAt
+        };
+
+        console.log(`Formatted order ${row.driverOrderId}:`, {
+          drvStatus: formattedOrder.drvStatus,
+          isHandOver: formattedOrder.isHandOver,
+          invoiceNumber: formattedOrder.invoiceNumber,
+          returnReason: formattedOrder.returnDetails.reason
+        });
+
+        return formattedOrder;
+      });
+
+      resolve(formattedResults);
+    });
+  });
+};
