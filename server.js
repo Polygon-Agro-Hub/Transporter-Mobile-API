@@ -61,12 +61,14 @@ const complainroute = require("./routes/complain-routes");
 const orderroute = require("./routes/order-routes");
 const returnrote = require("./routes/return-routes");
 const holdroute = require("./routes/hold-routes");
+const homeroute = require("./routes/home-routes");
 
 app.use(`${BASE_PATH}/api/auth`, userroute);
 app.use(`${BASE_PATH}/api/complain`, complainroute);
 app.use(`${BASE_PATH}/api/order`, orderroute);
 app.use(`${BASE_PATH}/api/return`, returnrote);
 app.use(`${BASE_PATH}/api/hold`, holdroute);
+app.use(`${BASE_PATH}/api/home`, homeroute);
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
