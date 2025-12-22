@@ -99,3 +99,33 @@ exports.submitReturn = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Get Driver's Return Orders
+exports.GetDriverReturnOrders = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const driverId = req.user.id;
+
+  try {
+    const returnOrders = await returnDao.getDriverReturnOrdersDAO(driverId);
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        returnOrders,
+        totalReturnOrders: returnOrders.length,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching driver return orders:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to fetch return orders",
+    });
+  }
+});

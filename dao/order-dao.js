@@ -153,16 +153,33 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
   return new Promise((resolve, reject) => {
     let sql = `
       SELECT 
-        MIN(do.id) as driverOrderId,
-        GROUP_CONCAT(do.id ORDER BY do.createdAt) as allDriverOrderIds,
-        GROUP_CONCAT(po.id ORDER BY po.id) as allProcessOrderIds,
-        GROUP_CONCAT(o.id ORDER BY o.id) as allOrderIds,
-        GROUP_CONCAT(o.sheduleTime ORDER BY o.sheduleTime) as allScheduleTimes,
-        MIN(o.sheduleTime) as primaryScheduleTime,
-        COUNT(*) as jobCount,
-        MAX(do.drvStatus) as drvStatus,
-        MAX(do.isHandOver) as isHandOver,
-        u.id as userId,
+        do.id as driverOrderId,
+        do.drvStatus,
+        do.isHandOver,
+        do.createdAt as driverOrderCreatedAt,
+        po.id as processOrderId,
+        po.status as processStatus,
+        o.id as orderId,
+        o.userId,
+        o.sheduleTime,
+        o.buildingType,
+        o.fullName,
+        o.phone1,
+        o.phonecode1,
+        o.phone2,
+        o.phonecode2,
+        -- House address details
+        oh.houseNo as house_houseNo,
+        oh.streetName as house_streetName,
+        oh.city as house_city,
+        -- Apartment address details  
+        oa.buildingNo as apartment_buildingNo,
+        oa.buildingName as apartment_buildingName,
+        oa.unitNo as apartment_unitNo,
+        oa.floorNo as apartment_floorNo,
+        oa.houseNo as apartment_houseNo,
+        oa.streetName as apartment_streetName,
+        oa.city as apartment_city,
         u.title as userTitle,
         u.firstName,
         u.lastName,
@@ -173,6 +190,8 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
       INNER JOIN market_place.processorders po ON do.orderId = po.id
       INNER JOIN market_place.orders o ON po.orderId = o.id
       INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
+      LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
+      LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
       WHERE do.driverId = ?
         AND do.isHandOver = ?
     `;
@@ -189,7 +208,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
       }
     }
 
-    sql += ` GROUP BY u.id ORDER BY MIN(o.sheduleTime) ASC, MAX(do.createdAt) DESC`;
+    sql += ` ORDER BY o.userId, o.sheduleTime ASC, do.createdAt ASC`;
 
     db.collectionofficer.query(sql, params, (err, results) => {
       if (err) {
@@ -198,34 +217,195 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         return reject(new Error("Failed to fetch driver orders"));
       }
 
-      const formattedResults = results.map((row, index) => ({
-        driverOrderId: row.driverOrderId,
-        drvStatus: row.drvStatus,
-        isHandOver: row.isHandOver === 1,
-        fullName: `${row.firstName || ""} ${row.lastName || ""}`.trim(),
-        jobCount: row.jobCount,
-        allDriverOrderIds: row.allDriverOrderIds
-          ? row.allDriverOrderIds.split(",").map(Number)
-          : [row.driverOrderId],
-        allOrderIds: row.allOrderIds
-          ? row.allOrderIds.split(",").map(Number)
-          : [],
-        allProcessOrderIds: row.allProcessOrderIds
-          ? row.allProcessOrderIds.split(",").map(Number)
-          : [],
-        allScheduleTimes: row.allScheduleTimes
-          ? row.allScheduleTimes.split(",")
-          : [],
-        primaryScheduleTime: row.primaryScheduleTime || "Not Scheduled",
-        sequenceNumber: (index + 1).toString().padStart(2, "0"),
-        userId: row.userId,
-        title: row.userTitle,
-        firstName: row.firstName,
-        lastName: row.lastName,
-        phoneCode: row.phoneCode,
-        phoneNumber: row.phoneNumber,
-        image: row.image,
-      }));
+      // Group orders by user and address
+      const groupedOrders = results.reduce((groups, order) => {
+        const userId = order.userId;
+        const buildingType = order.buildingType;
+
+        // Create address key based on building type
+        let addressKey = `${userId}_`;
+
+        if (buildingType === "House") {
+          addressKey += `HOUSE_${order.house_houseNo || ""}_${
+            order.house_streetName || ""
+          }_${order.house_city || ""}`;
+        } else if (buildingType === "Apartment") {
+          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${
+            order.apartment_buildingName || ""
+          }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${
+            order.apartment_streetName || ""
+          }_${order.apartment_city || ""}`;
+        } else {
+          addressKey += `OTHER_${order.orderId}`; // No address or other type
+        }
+
+        // Clean the address key (remove undefined/null, trim)
+        addressKey = addressKey
+          .replace(/undefined/g, "")
+          .replace(/null/g, "")
+          .replace(/_+/g, "_")
+          .replace(/_$/, "");
+
+        // Initialize group if doesn't exist
+        if (!groups[addressKey]) {
+          groups[addressKey] = {
+            driverOrderId: order.driverOrderId,
+            allDriverOrderIds: [],
+            allProcessOrderIds: [],
+            allOrderIds: [],
+            allScheduleTimes: [],
+            drvStatus: order.drvStatus,
+            isHandOver: order.isHandOver,
+            userId: order.userId,
+            userTitle: order.userTitle,
+            firstName: order.firstName,
+            lastName: order.lastName,
+            phoneCode: order.phoneCode,
+            phoneNumber: order.phoneNumber,
+            image: order.image,
+            buildingType: order.buildingType,
+            fullName: order.fullName,
+            phone1: order.phone1,
+            phonecode1: order.phonecode1,
+            phone2: order.phone2,
+            phonecode2: order.phonecode2,
+            // Address details
+            addressDetails:
+              buildingType === "House"
+                ? {
+                    houseNo: order.house_houseNo,
+                    streetName: order.house_streetName,
+                    city: order.house_city,
+                  }
+                : buildingType === "Apartment"
+                ? {
+                    buildingNo: order.apartment_buildingNo,
+                    buildingName: order.apartment_buildingName,
+                    unitNo: order.apartment_unitNo,
+                    floorNo: order.apartment_floorNo,
+                    houseNo: order.apartment_houseNo,
+                    streetName: order.apartment_streetName,
+                    city: order.apartment_city,
+                  }
+                : null,
+          };
+        }
+
+        // Add this order to the group
+        const group = groups[addressKey];
+        group.allDriverOrderIds.push(order.driverOrderId);
+        group.allProcessOrderIds.push(order.processOrderId);
+        group.allOrderIds.push(order.orderId);
+
+        if (order.sheduleTime) {
+          group.allScheduleTimes.push(order.sheduleTime);
+        }
+
+        // Update status to most critical (non-completed takes priority)
+        const statusPriority = {
+          Return: 1,
+          Hold: 2,
+          "On the way": 3,
+          Todo: 4,
+          Completed: 5,
+        };
+
+        const currentPriority = statusPriority[group.drvStatus] || 5;
+        const newPriority = statusPriority[order.drvStatus] || 5;
+
+        if (newPriority < currentPriority) {
+          group.drvStatus = order.drvStatus;
+        }
+
+        // Update isHandOver (if any is handover, mark as handover)
+        if (order.isHandOver === 1) {
+          group.isHandOver = 1;
+        }
+
+        return groups;
+      }, {});
+
+      // Convert grouped object to array and format
+      const groupedArray = Object.values(groupedOrders);
+
+      const formattedResults = groupedArray.map((group, index) => {
+        // Sort all IDs
+        group.allDriverOrderIds.sort((a, b) => a - b);
+        group.allProcessOrderIds.sort((a, b) => a - b);
+        group.allOrderIds.sort((a, b) => a - b);
+
+        // Get unique sorted schedule times
+        const uniqueScheduleTimes = [...new Set(group.allScheduleTimes)].sort();
+        const primaryScheduleTime =
+          uniqueScheduleTimes.length > 0
+            ? uniqueScheduleTimes[0]
+            : "Not Scheduled";
+
+        // Format address for display
+        let formattedAddress = "No Address";
+        if (group.buildingType === "House" && group.addressDetails) {
+          const addr = group.addressDetails;
+          formattedAddress = `${addr.houseNo || ""}, ${
+            addr.streetName || ""
+          }, ${addr.city || ""}`
+            .trim()
+            .replace(/^,\s*|\s*,/g, "");
+        } else if (group.buildingType === "Apartment" && group.addressDetails) {
+          const addr = group.addressDetails;
+          const parts = [];
+          if (addr.buildingNo) parts.push(`Building ${addr.buildingNo}`);
+          if (addr.buildingName) parts.push(addr.buildingName);
+          if (addr.unitNo) parts.push(`Unit ${addr.unitNo}`);
+          if (addr.floorNo) parts.push(`Floor ${addr.floorNo}`);
+          if (addr.houseNo) parts.push(addr.houseNo);
+          if (addr.streetName) parts.push(addr.streetName);
+          if (addr.city) parts.push(addr.city);
+          formattedAddress = parts.join(", ");
+        }
+
+        return {
+          driverOrderId: group.allDriverOrderIds[0], // First driver order ID
+          drvStatus: group.drvStatus,
+          isHandOver: group.isHandOver === 1,
+          fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
+          jobCount: group.allOrderIds.length,
+          allDriverOrderIds: group.allDriverOrderIds,
+          allOrderIds: group.allOrderIds,
+          allProcessOrderIds: group.allProcessOrderIds,
+          allScheduleTimes: uniqueScheduleTimes,
+          primaryScheduleTime: primaryScheduleTime,
+          sequenceNumber: (index + 1).toString().padStart(2, "0"),
+          userId: group.userId,
+          title: group.userTitle,
+          firstName: group.firstName,
+          lastName: group.lastName,
+          phoneCode: group.phoneCode,
+          phoneNumber: group.phoneNumber,
+          image: group.image,
+          // Additional address info
+          buildingType: group.buildingType,
+          address: formattedAddress,
+          addressDetails: group.addressDetails,
+          phoneNumbers: [group.phone1, group.phone2]
+            .filter((phone) => phone)
+            .map((phone, idx) => ({
+              phone: phone,
+              code: idx === 0 ? group.phonecode1 : group.phonecode2,
+            })),
+        };
+      });
+
+      // Sort by primary schedule time
+      formattedResults.sort((a, b) => {
+        if (
+          a.primaryScheduleTime === "Not Scheduled" &&
+          b.primaryScheduleTime === "Not Scheduled"
+        )
+          return 0;
+        if (a.primaryScheduleTime === "Not Scheduled") return 1;
+        if (b.primaryScheduleTime === "Not Scheduled") return -1;
+        return a.primaryScheduleTime.localeCompare(b.primaryScheduleTime);
+      });
 
       resolve(formattedResults);
     });
@@ -263,23 +443,20 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         po.amount,
         po.isPaid,
         po.status as processStatus,
-        CASE 
-          WHEN o.buildingType = 'House' AND oh.houseNo IS NOT NULL THEN
-            CONCAT_WS(', ', oh.houseNo, oh.streetName, oh.city)
-          WHEN o.buildingType = 'Apartment' AND oa.buildingNo IS NOT NULL THEN
-            CONCAT_WS(', ', 
-              CONCAT('No. ', oa.buildingNo),
-              oa.buildingName,
-              CONCAT('Unit ', oa.unitNo),
-              CONCAT('Floor ', oa.floorNo),
-              oa.houseNo,
-              oa.streetName,
-              oa.city
-            )
-          ELSE 'Address not specified'
-        END as userAddress
+        -- House address
+        oh.houseNo as house_houseNo,
+        oh.streetName as house_streetName,
+        oh.city as house_city,
+        -- Apartment address
+        oa.buildingNo as apartment_buildingNo,
+        oa.buildingName as apartment_buildingName,
+        oa.unitNo as apartment_unitNo,
+        oa.floorNo as apartment_floorNo,
+        oa.houseNo as apartment_houseNo,
+        oa.streetName as apartment_streetName,
+        oa.city as apartment_city
       FROM collection_officer.driverorders do
-      INNER JOIN market_place.processorders po ON do.orderId = po.id  -- Correct FK
+      INNER JOIN market_place.processorders po ON do.orderId = po.id
       INNER JOIN market_place.orders o ON po.orderId = o.id
       INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
       LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
@@ -307,6 +484,29 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
       }
 
       const firstRow = results[0];
+      
+      // Format address based on building type
+      let userAddress = "Address not specified";
+      if (firstRow.buildingType === 'House') {
+        const parts = [
+          firstRow.house_houseNo,
+          firstRow.house_streetName,
+          firstRow.house_city
+        ].filter(Boolean);
+        userAddress = parts.join(', ') || "Address not specified";
+      } else if (firstRow.buildingType === 'Apartment') {
+        const parts = [
+          firstRow.apartment_buildingNo ? `No. ${firstRow.apartment_buildingNo}` : null,
+          firstRow.apartment_buildingName,
+          firstRow.apartment_unitNo ? `Unit ${firstRow.apartment_unitNo}` : null,
+          firstRow.apartment_floorNo ? `Floor ${firstRow.apartment_floorNo}` : null,
+          firstRow.apartment_houseNo,
+          firstRow.apartment_streetName,
+          firstRow.apartment_city
+        ].filter(Boolean);
+        userAddress = parts.join(', ') || "Address not specified";
+      }
+
       const user = {
         id: firstRow.userId,
         title: firstRow.title,
@@ -315,24 +515,56 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         phoneCode: firstRow.phoneCode,
         phoneNumber: firstRow.phoneNumber,
         image: firstRow.image,
-        address: firstRow.userAddress || "Address not specified",
+        address: userAddress,
+        billingName: firstRow.billingName,
+        billingTitle: firstRow.billingTitle,
+        billingPhoneCode: firstRow.billingPhoneCode,
+        billingPhone: firstRow.billingPhone,
+        buildingType: firstRow.buildingType,
+        deliveryMethod: firstRow.delivaryMethod
       };
 
-      const orders = results.map((row) => ({
-        orderId: row.orderId,
-        sheduleTime: row.sheduleTime,
-        buildingType: row.buildingType,
-        deliveryMethod: row.delivaryMethod,
-        processOrder: {
-          id: row.processOrderId,
-          invNo: row.invNo,
-          paymentMethod: row.paymentMethod,
-          amount: row.amount,
-          isPaid: row.isPaid === 1,
-          status: row.processStatus,
-        },
-        pricing: row.fullTotal,
-      }));
+      const orders = results.map((row) => {
+        // Format order-specific address
+        let orderAddress = "Address not specified";
+        if (row.buildingType === 'House') {
+          const parts = [
+            row.house_houseNo,
+            row.house_streetName,
+            row.house_city
+          ].filter(Boolean);
+          orderAddress = parts.join(', ') || "Address not specified";
+        } else if (row.buildingType === 'Apartment') {
+          const parts = [
+            row.apartment_buildingNo ? `No. ${row.apartment_buildingNo}` : null,
+            row.apartment_buildingName,
+            row.apartment_unitNo ? `Unit ${row.apartment_unitNo}` : null,
+            row.apartment_floorNo ? `Floor ${row.apartment_floorNo}` : null,
+            row.apartment_houseNo,
+            row.apartment_streetName,
+            row.apartment_city
+          ].filter(Boolean);
+          orderAddress = parts.join(', ') || "Address not specified";
+        }
+
+        return {
+          orderId: row.orderId,
+          sheduleTime: row.sheduleTime,
+          fullName: row.billingName,
+          phonecode1: row.billingPhoneCode, 
+          phone1: row.billingPhone, 
+          address: orderAddress, 
+          processOrder: {
+            id: row.processOrderId,
+            invNo: row.invNo,
+            paymentMethod: row.paymentMethod,
+            amount: row.amount,
+            isPaid: row.isPaid === 1,
+            status: row.processStatus,
+          },
+          pricing: row.fullTotal,
+        };
+      });
 
       resolve({ user, orders });
     });
