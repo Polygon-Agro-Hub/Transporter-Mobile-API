@@ -445,7 +445,7 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         po.invNo,
         po.paymentMethod,
         po.isPaid,
-        po.status as processStatus,
+        do.drvStatus as status, -- Get status from driverorders table
         -- House address
         oh.houseNo as house_houseNo,
         oh.streetName as house_streetName,
@@ -568,7 +568,7 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
             invNo: row.invNo,
             paymentMethod: row.paymentMethod,
             isPaid: row.isPaid === 1,
-            status: row.processStatus,
+            status: row.status, // Now using drvStatus from driverorders table
           },
           pricing: row.fullTotal,
         };
