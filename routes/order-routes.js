@@ -4,7 +4,6 @@ const auth = require('../middlewares/auth.middleware');
 const orderEp = require('../endpoint/order-ep');
 const { upload } = require('../middlewares/multer.middleware');
 
-
 // Assign Driver Orders
 router.post('/assign-driver-order', auth, orderEp.assignDriverOrder);
 
