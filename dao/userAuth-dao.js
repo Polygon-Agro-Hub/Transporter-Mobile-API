@@ -133,9 +133,41 @@ exports.getUserProfile = async (empId) => {
       image: user.image || "",
       createdAt: user.createdAt || "",
       vType: user.vType || null,
-      vRegNo: user.vRegNo || null
+      vRegNo: user.vRegNo || null,
     };
   } catch (err) {
     throw new Error("Database error: " + err.message);
+  }
+};
+
+// Update Profile Image
+exports.updateProfileImage = async (empId, imageUrl) => {
+  try {
+    const sql = `
+      UPDATE collectionofficer 
+      SET image = ? 
+      WHERE empId = ? 
+        AND status = "Approved"
+    `;
+
+    const [result] = await db.collectionofficer
+      .promise()
+      .query(sql, [imageUrl, empId]);
+
+    if (result.affectedRows === 0) {
+      return {
+        success: false,
+        message: "User not found or not approved",
+      };
+    }
+
+    return {
+      success: true,
+      message: "Profile image updated successfully",
+      affectedRows: result.affectedRows,
+    };
+  } catch (err) {
+    console.error("Database error in updateProfileImage:", err.message);
+    throw new Error("Failed to update profile image: " + err.message);
   }
 };

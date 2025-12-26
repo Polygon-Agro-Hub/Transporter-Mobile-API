@@ -12,4 +12,7 @@ router.post('/submit', auth, returnEp.submitReturn);
 // Get Driver's Return Orders
 router.get('/get-driver-return-orders', auth, returnEp.GetDriverReturnOrders);
 
+// Update Return Order to Return Received
+router.post('/update-return-received', auth, returnEp.updateReturnReceived);
+
 module.exports = router;
