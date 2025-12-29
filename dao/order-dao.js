@@ -26,6 +26,55 @@ exports.GetProcessOrderIdByInvNo = async (invNo) => {
 };
 
 // Save driver order and update processorders status
+// exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
+//   return new Promise(async (resolve, reject) => {
+//     try {
+//       // STEP 1: Insert using processorders.id (FK correct)
+//       const insertSql = `
+//         INSERT INTO collection_officer.driverorders
+//         (driverId, orderId, handOverTime, drvStatus, isHandOver, createdAt)
+//         VALUES (?, ?, ?, 'Todo', 0, NOW())
+//       `;
+
+//       const insertResult = await new Promise((res, rej) => {
+//         db.collectionofficer.query(
+//           insertSql,
+//           [driverId, processOrderId, handOverTime],
+//           (err, result) => {
+//             if (err) return rej(err);
+//             res(result);
+//           }
+//         );
+//       });
+
+//       // STEP 2: Update processorders
+//       const updateSql = `
+//         UPDATE market_place.processorders
+//         SET status = 'Collected',
+//             isTargetAssigned = 1
+//         WHERE id = ?
+//       `;
+
+//       await new Promise((res, rej) => {
+//         db.marketPlace.query(updateSql, [processOrderId], (err, result) => {
+//           if (err) return rej(err);
+//           res(result);
+//         });
+//       });
+
+//       resolve({
+//         message: "Order assigned successfully",
+//         driverOrderId: insertResult.insertId,
+//         processOrderId,
+//         status: "Collected",
+//       });
+//     } catch (error) {
+//       reject(error);
+//     }
+//   });
+// };
+
+// Save driver order and update processorders status
 exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
   return new Promise(async (resolve, reject) => {
     try {
@@ -57,6 +106,20 @@ exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
 
       await new Promise((res, rej) => {
         db.marketPlace.query(updateSql, [processOrderId], (err, result) => {
+          if (err) return rej(err);
+          res(result);
+        });
+      });
+
+      // STEP 3: Insert notification
+      const notificationSql = `
+        INSERT INTO market_place.dashnotification
+        (orderId, readStatus, title, createdAt)
+        VALUES (?, 0, 'Driver has collected the order', NOW())
+      `;
+
+      await new Promise((res, rej) => {
+        db.marketPlace.query(notificationSql, [processOrderId], (err, result) => {
           if (err) return rej(err);
           res(result);
         });
@@ -226,15 +289,12 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         let addressKey = `${userId}_`;
 
         if (buildingType === "House") {
-          addressKey += `HOUSE_${order.house_houseNo || ""}_${
-            order.house_streetName || ""
-          }_${order.house_city || ""}`;
+          addressKey += `HOUSE_${order.house_houseNo || ""}_${order.house_streetName || ""
+            }_${order.house_city || ""}`;
         } else if (buildingType === "Apartment") {
-          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${
-            order.apartment_buildingName || ""
-          }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${
-            order.apartment_streetName || ""
-          }_${order.apartment_city || ""}`;
+          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${order.apartment_buildingName || ""
+            }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${order.apartment_streetName || ""
+            }_${order.apartment_city || ""}`;
         } else {
           addressKey += `OTHER_${order.orderId}`; // No address or other type
         }
@@ -273,12 +333,12 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             addressDetails:
               buildingType === "House"
                 ? {
-                    houseNo: order.house_houseNo,
-                    streetName: order.house_streetName,
-                    city: order.house_city,
-                  }
+                  houseNo: order.house_houseNo,
+                  streetName: order.house_streetName,
+                  city: order.house_city,
+                }
                 : buildingType === "Apartment"
-                ? {
+                  ? {
                     buildingNo: order.apartment_buildingNo,
                     buildingName: order.apartment_buildingName,
                     unitNo: order.apartment_unitNo,
@@ -287,7 +347,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
                     streetName: order.apartment_streetName,
                     city: order.apartment_city,
                   }
-                : null,
+                  : null,
           };
         }
 
@@ -345,9 +405,8 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         let formattedAddress = "No Address";
         if (group.buildingType === "House" && group.addressDetails) {
           const addr = group.addressDetails;
-          formattedAddress = `${addr.houseNo || ""}, ${
-            addr.streetName || ""
-          }, ${addr.city || ""}`
+          formattedAddress = `${addr.houseNo || ""}, ${addr.streetName || ""
+            }, ${addr.city || ""}`
             .trim()
             .replace(/^,\s*|\s*,/g, "");
         } else if (group.buildingType === "Apartment" && group.addressDetails) {
@@ -487,7 +546,7 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
       }
 
       const firstRow = results[0];
-      
+
       // Format address based on building type
       let userAddress = "Address not specified";
       if (firstRow.buildingType === 'House') {
@@ -523,8 +582,8 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         billingTitle: firstRow.billingTitle,
         billingPhoneCode: firstRow.billingPhoneCode,
         billingPhone: firstRow.billingPhone,
-        billingPhoneCode2: firstRow.billingPhoneCode2,  
-        billingPhone2: firstRow.billingPhone2,    
+        billingPhoneCode2: firstRow.billingPhoneCode2,
+        billingPhone2: firstRow.billingPhone2,
         buildingType: firstRow.buildingType,
         deliveryMethod: firstRow.delivaryMethod
       };
@@ -556,13 +615,13 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
           orderId: row.orderId,
           sheduleTime: row.sheduleTime,
           fullName: row.billingName,
-          phonecode1: row.billingPhoneCode, 
+          phonecode1: row.billingPhoneCode,
           phone1: row.billingPhone,
-          phonecode2: row.billingPhoneCode2, 
-          phone2: row.billingPhone2,         
-          longitude: row.longitude,          
-          latitude: row.latitude,       
-          address: orderAddress, 
+          phonecode2: row.billingPhoneCode2,
+          phone2: row.billingPhone2,
+          longitude: row.longitude,
+          latitude: row.latitude,
+          address: orderAddress,
           processOrder: {
             id: row.processOrderId,
             invNo: row.invNo,
