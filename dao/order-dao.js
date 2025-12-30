@@ -33,20 +33,20 @@ exports.GetProcessOrderInfoByInvNo = async (invNo) => {
 };
 
 // Save driver order and update processorders status
-exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
+exports.SaveDriverOrder = async (driverId, processOrderId) => {
   return new Promise(async (resolve, reject) => {
     try {
-      // STEP 1: Insert using processorders.id (FK correct)
+      // STEP 1: Insert driver order 
       const insertSql = `
         INSERT INTO collection_officer.driverorders
-        (driverId, orderId, handOverTime, drvStatus, isHandOver, createdAt)
-        VALUES (?, ?, ?, 'Todo', 0, NOW())
+        (driverId, orderId, drvStatus, isHandOver, createdAt)
+        VALUES (?, ?, 'Todo', 0, NOW())
       `;
 
       const insertResult = await new Promise((res, rej) => {
         db.collectionofficer.query(
           insertSql,
-          [driverId, processOrderId, handOverTime],
+          [driverId, processOrderId],
           (err, result) => {
             if (err) return rej(err);
             res(result);
@@ -54,7 +54,7 @@ exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
         );
       });
 
-      // STEP 2: Update processorders - change status to 'Collected'
+      // STEP 2: Update processorders status
       const updateSql = `
         UPDATE market_place.processorders
         SET status = 'Collected',
@@ -453,7 +453,7 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         u.phoneNumber,
         u.image,
         o.fullName as billingName,
-        o.title as billingTitle,
+        o.title as billingTitle, -- Already selected
         o.phonecode1 as billingPhoneCode,
         o.phone1 as billingPhone,
         o.phonecode2 as billingPhoneCode2,  
@@ -513,32 +513,41 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
 
       const firstRow = results[0];
 
-      // Format address based on building type
+      // Helper function to format House address
+      const formatHouseAddress = (row) => {
+        const parts = [];
+        if (row.house_houseNo) parts.push(`House.No ${row.house_houseNo}`);
+        if (row.house_streetName)
+          parts.push(`Street : ${row.house_streetName}`);
+        if (row.house_city) parts.push(`City : ${row.house_city}`);
+        return parts.length > 0 ? parts.join(", ") : "Address not specified";
+      };
+
+      // Helper function to format Apartment address
+      const formatApartmentAddress = (row) => {
+        const parts = [];
+        if (row.apartment_buildingNo)
+          parts.push(`B.No : ${row.apartment_buildingNo}`);
+        if (row.apartment_buildingName)
+          parts.push(`B.Name : ${row.apartment_buildingName}`);
+        if (row.apartment_unitNo)
+          parts.push(`Unit.No : ${row.apartment_unitNo}`);
+        if (row.apartment_floorNo)
+          parts.push(`Floor.No : ${row.apartment_floorNo}`);
+        if (row.apartment_houseNo)
+          parts.push(`House.No : ${row.apartment_houseNo}`);
+        if (row.apartment_streetName)
+          parts.push(`Street : ${row.apartment_streetName}`);
+        if (row.apartment_city) parts.push(`City : ${row.apartment_city}`);
+        return parts.length > 0 ? parts.join(", ") : "Address not specified";
+      };
+
+      // Format user address based on building type
       let userAddress = "Address not specified";
       if (firstRow.buildingType === "House") {
-        const parts = [
-          firstRow.house_houseNo,
-          firstRow.house_streetName,
-          firstRow.house_city,
-        ].filter(Boolean);
-        userAddress = parts.join(", ") || "Address not specified";
+        userAddress = formatHouseAddress(firstRow);
       } else if (firstRow.buildingType === "Apartment") {
-        const parts = [
-          firstRow.apartment_buildingNo
-            ? `No. ${firstRow.apartment_buildingNo}`
-            : null,
-          firstRow.apartment_buildingName,
-          firstRow.apartment_unitNo
-            ? `Unit ${firstRow.apartment_unitNo}`
-            : null,
-          firstRow.apartment_floorNo
-            ? `Floor ${firstRow.apartment_floorNo}`
-            : null,
-          firstRow.apartment_houseNo,
-          firstRow.apartment_streetName,
-          firstRow.apartment_city,
-        ].filter(Boolean);
-        userAddress = parts.join(", ") || "Address not specified";
+        userAddress = formatApartmentAddress(firstRow);
       }
 
       const user = {
@@ -564,29 +573,16 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         // Format order-specific address
         let orderAddress = "Address not specified";
         if (row.buildingType === "House") {
-          const parts = [
-            row.house_houseNo,
-            row.house_streetName,
-            row.house_city,
-          ].filter(Boolean);
-          orderAddress = parts.join(", ") || "Address not specified";
+          orderAddress = formatHouseAddress(row);
         } else if (row.buildingType === "Apartment") {
-          const parts = [
-            row.apartment_buildingNo ? `No. ${row.apartment_buildingNo}` : null,
-            row.apartment_buildingName,
-            row.apartment_unitNo ? `Unit ${row.apartment_unitNo}` : null,
-            row.apartment_floorNo ? `Floor ${row.apartment_floorNo}` : null,
-            row.apartment_houseNo,
-            row.apartment_streetName,
-            row.apartment_city,
-          ].filter(Boolean);
-          orderAddress = parts.join(", ") || "Address not specified";
+          orderAddress = formatApartmentAddress(row);
         }
 
         return {
           orderId: row.orderId,
           sheduleTime: row.sheduleTime,
           fullName: row.billingName,
+          title: row.billingTitle, // Add title to order object
           phonecode1: row.billingPhoneCode,
           phone1: row.billingPhone,
           phonecode2: row.billingPhoneCode2,
@@ -646,13 +642,13 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
 
         // Update driverorders table
         const updateDriverOrdersSql = `
-        UPDATE collection_officer.driverorders
-        SET drvStatus = 'On the way',
-            createdAt = CURRENT_TIMESTAMP
-        WHERE driverId = ?
-        AND orderId IN (?)
-        AND isHandOver = 0
-      `;
+          UPDATE collection_officer.driverorders
+          SET drvStatus = 'On the way',
+              createdAt = CURRENT_TIMESTAMP
+          WHERE driverId = ?
+          AND orderId IN (?)
+          AND isHandOver = 0
+        `;
 
         console.log("Updating driverorders with SQL:", updateDriverOrdersSql);
         console.log("Parameters:", [driverId, orderIds]);
@@ -671,12 +667,12 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
               result1.affectedRows
             );
 
-            // Update processorders table
+            // CORRECTED: Update processorders table using id IN (?) instead of orderId IN (?)
             const updateProcessOrdersSql = `
-          UPDATE market_place.processorders
-          SET status = 'On the way'
-          WHERE orderId IN (?)
-        `;
+              UPDATE market_place.processorders
+              SET status = 'On the way'
+              WHERE id IN (?)
+            `;
 
             console.log(
               "Updating processorders with SQL:",
@@ -700,20 +696,20 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
 
                 // Get updated order details for response
                 const getUpdatedOrdersSql = `
-            SELECT 
-              do.id as driverOrderId,
-              do.orderId as processOrderId,
-              po.orderId as marketOrderId,
-              po.invNo,
-              po.status as processStatus,
-              do.drvStatus,
-              do.createdAt as journeyStartedAt
-            FROM collection_officer.driverorders do
-            INNER JOIN market_place.processorders po ON do.orderId = po.id
-            WHERE do.driverId = ?
-            AND do.orderId IN (?)
-            AND do.drvStatus = 'On the way'
-          `;
+                  SELECT 
+                    do.id as driverOrderId,
+                    do.orderId as processOrderId,
+                    po.orderId as marketOrderId,
+                    po.invNo,
+                    po.status as processStatus,
+                    do.drvStatus,
+                    do.createdAt as journeyStartedAt
+                  FROM collection_officer.driverorders do
+                  INNER JOIN market_place.processorders po ON do.orderId = po.id
+                  WHERE do.driverId = ?
+                  AND do.orderId IN (?)
+                  AND do.drvStatus = 'On the way'
+                `;
 
                 db.collectionofficer.query(
                   getUpdatedOrdersSql,
