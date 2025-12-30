@@ -1,14 +1,17 @@
 const db = require("../startup/database");
 
 // Get process order ID by invoice number
-exports.GetProcessOrderIdByInvNo = async (invNo) => {
+exports.GetProcessOrderInfoByInvNo = async (invNo) => {
   return new Promise((resolve, reject) => {
     const sql = `
-            SELECT id 
-            FROM market_place.processorders 
-            WHERE invNo = ? 
-            LIMIT 1
-        `;
+      SELECT 
+        id,
+        status,
+        invNo
+      FROM market_place.processorders 
+      WHERE invNo = ? 
+      LIMIT 1
+    `;
 
     db.marketPlace.query(sql, [invNo], (err, results) => {
       if (err) {
@@ -20,59 +23,14 @@ exports.GetProcessOrderIdByInvNo = async (invNo) => {
         return reject(new Error("Invoice number not found"));
       }
 
-      resolve(results[0].id);
+      resolve({
+        id: results[0].id,
+        status: results[0].status,
+        invNo: results[0].invNo,
+      });
     });
   });
 };
-
-// Save driver order and update processorders status
-// exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
-//   return new Promise(async (resolve, reject) => {
-//     try {
-//       // STEP 1: Insert using processorders.id (FK correct)
-//       const insertSql = `
-//         INSERT INTO collection_officer.driverorders
-//         (driverId, orderId, handOverTime, drvStatus, isHandOver, createdAt)
-//         VALUES (?, ?, ?, 'Todo', 0, NOW())
-//       `;
-
-//       const insertResult = await new Promise((res, rej) => {
-//         db.collectionofficer.query(
-//           insertSql,
-//           [driverId, processOrderId, handOverTime],
-//           (err, result) => {
-//             if (err) return rej(err);
-//             res(result);
-//           }
-//         );
-//       });
-
-//       // STEP 2: Update processorders
-//       const updateSql = `
-//         UPDATE market_place.processorders
-//         SET status = 'Collected',
-//             isTargetAssigned = 1
-//         WHERE id = ?
-//       `;
-
-//       await new Promise((res, rej) => {
-//         db.marketPlace.query(updateSql, [processOrderId], (err, result) => {
-//           if (err) return rej(err);
-//           res(result);
-//         });
-//       });
-
-//       resolve({
-//         message: "Order assigned successfully",
-//         driverOrderId: insertResult.insertId,
-//         processOrderId,
-//         status: "Collected",
-//       });
-//     } catch (error) {
-//       reject(error);
-//     }
-//   });
-// };
 
 // Save driver order and update processorders status
 exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
@@ -96,7 +54,7 @@ exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
         );
       });
 
-      // STEP 2: Update processorders
+      // STEP 2: Update processorders - change status to 'Collected'
       const updateSql = `
         UPDATE market_place.processorders
         SET status = 'Collected',
@@ -119,10 +77,14 @@ exports.SaveDriverOrder = async (driverId, processOrderId, handOverTime) => {
       `;
 
       await new Promise((res, rej) => {
-        db.marketPlace.query(notificationSql, [processOrderId], (err, result) => {
-          if (err) return rej(err);
-          res(result);
-        });
+        db.marketPlace.query(
+          notificationSql,
+          [processOrderId],
+          (err, result) => {
+            if (err) return rej(err);
+            res(result);
+          }
+        );
       });
 
       resolve({
@@ -289,12 +251,15 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         let addressKey = `${userId}_`;
 
         if (buildingType === "House") {
-          addressKey += `HOUSE_${order.house_houseNo || ""}_${order.house_streetName || ""
-            }_${order.house_city || ""}`;
+          addressKey += `HOUSE_${order.house_houseNo || ""}_${
+            order.house_streetName || ""
+          }_${order.house_city || ""}`;
         } else if (buildingType === "Apartment") {
-          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${order.apartment_buildingName || ""
-            }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${order.apartment_streetName || ""
-            }_${order.apartment_city || ""}`;
+          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${
+            order.apartment_buildingName || ""
+          }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${
+            order.apartment_streetName || ""
+          }_${order.apartment_city || ""}`;
         } else {
           addressKey += `OTHER_${order.orderId}`; // No address or other type
         }
@@ -333,12 +298,12 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             addressDetails:
               buildingType === "House"
                 ? {
-                  houseNo: order.house_houseNo,
-                  streetName: order.house_streetName,
-                  city: order.house_city,
-                }
+                    houseNo: order.house_houseNo,
+                    streetName: order.house_streetName,
+                    city: order.house_city,
+                  }
                 : buildingType === "Apartment"
-                  ? {
+                ? {
                     buildingNo: order.apartment_buildingNo,
                     buildingName: order.apartment_buildingName,
                     unitNo: order.apartment_unitNo,
@@ -347,7 +312,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
                     streetName: order.apartment_streetName,
                     city: order.apartment_city,
                   }
-                  : null,
+                : null,
           };
         }
 
@@ -405,8 +370,9 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         let formattedAddress = "No Address";
         if (group.buildingType === "House" && group.addressDetails) {
           const addr = group.addressDetails;
-          formattedAddress = `${addr.houseNo || ""}, ${addr.streetName || ""
-            }, ${addr.city || ""}`
+          formattedAddress = `${addr.houseNo || ""}, ${
+            addr.streetName || ""
+          }, ${addr.city || ""}`
             .trim()
             .replace(/^,\s*|\s*,/g, "");
         } else if (group.buildingType === "Apartment" && group.addressDetails) {
@@ -549,24 +515,30 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
 
       // Format address based on building type
       let userAddress = "Address not specified";
-      if (firstRow.buildingType === 'House') {
+      if (firstRow.buildingType === "House") {
         const parts = [
           firstRow.house_houseNo,
           firstRow.house_streetName,
-          firstRow.house_city
+          firstRow.house_city,
         ].filter(Boolean);
-        userAddress = parts.join(', ') || "Address not specified";
-      } else if (firstRow.buildingType === 'Apartment') {
+        userAddress = parts.join(", ") || "Address not specified";
+      } else if (firstRow.buildingType === "Apartment") {
         const parts = [
-          firstRow.apartment_buildingNo ? `No. ${firstRow.apartment_buildingNo}` : null,
+          firstRow.apartment_buildingNo
+            ? `No. ${firstRow.apartment_buildingNo}`
+            : null,
           firstRow.apartment_buildingName,
-          firstRow.apartment_unitNo ? `Unit ${firstRow.apartment_unitNo}` : null,
-          firstRow.apartment_floorNo ? `Floor ${firstRow.apartment_floorNo}` : null,
+          firstRow.apartment_unitNo
+            ? `Unit ${firstRow.apartment_unitNo}`
+            : null,
+          firstRow.apartment_floorNo
+            ? `Floor ${firstRow.apartment_floorNo}`
+            : null,
           firstRow.apartment_houseNo,
           firstRow.apartment_streetName,
-          firstRow.apartment_city
+          firstRow.apartment_city,
         ].filter(Boolean);
-        userAddress = parts.join(', ') || "Address not specified";
+        userAddress = parts.join(", ") || "Address not specified";
       }
 
       const user = {
@@ -585,20 +557,20 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         billingPhoneCode2: firstRow.billingPhoneCode2,
         billingPhone2: firstRow.billingPhone2,
         buildingType: firstRow.buildingType,
-        deliveryMethod: firstRow.delivaryMethod
+        deliveryMethod: firstRow.delivaryMethod,
       };
 
       const orders = results.map((row) => {
         // Format order-specific address
         let orderAddress = "Address not specified";
-        if (row.buildingType === 'House') {
+        if (row.buildingType === "House") {
           const parts = [
             row.house_houseNo,
             row.house_streetName,
-            row.house_city
+            row.house_city,
           ].filter(Boolean);
-          orderAddress = parts.join(', ') || "Address not specified";
-        } else if (row.buildingType === 'Apartment') {
+          orderAddress = parts.join(", ") || "Address not specified";
+        } else if (row.buildingType === "Apartment") {
           const parts = [
             row.apartment_buildingNo ? `No. ${row.apartment_buildingNo}` : null,
             row.apartment_buildingName,
@@ -606,9 +578,9 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
             row.apartment_floorNo ? `Floor ${row.apartment_floorNo}` : null,
             row.apartment_houseNo,
             row.apartment_streetName,
-            row.apartment_city
+            row.apartment_city,
           ].filter(Boolean);
-          orderAddress = parts.join(', ') || "Address not specified";
+          orderAddress = parts.join(", ") || "Address not specified";
         }
 
         return {

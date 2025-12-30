@@ -26,12 +26,22 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
     // Step 1: Get driver's empId for response
     const driverEmpId = await orderDao.GetDriverEmpId(driverId);
 
-    // Step 2: Get process order ID by invoice number
-    const orderId = await orderDao.GetProcessOrderIdByInvNo(invNo);
+    // Step 2: Get process order ID and check status by invoice number
+    const orderInfo = await orderDao.GetProcessOrderInfoByInvNo(invNo);
 
-    // Step 3: Check if order is already assigned to any driver
+    // Step 3: Check if order status is "Out For Delivery"
+    if (orderInfo.status !== "Out For Delivery") {
+      return res.status(400).json({
+        status: "error",
+        message:
+          "Still processing this order. Scanning will be available after it's set to Out For Delivery.",
+        currentStatus: orderInfo.status,
+      });
+    }
+
+    // Step 4: Check if order is already assigned to any driver
     const assignmentCheck = await orderDao.CheckOrderAlreadyAssigned(
-      orderId,
+      orderInfo.id,
       driverId
     );
 
@@ -53,18 +63,18 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
       }
     }
 
-    // Step 4: Generate handOverTime (current time + 24 hours)
+    // Step 5: Generate handOverTime (current time + 24 hours)
     const handOverTime = new Date();
     handOverTime.setHours(handOverTime.getHours() + 24);
 
-    // Step 5: Save driver order
+    // Step 6: Save driver order
     const result = await orderDao.SaveDriverOrder(
       driverId,
-      orderId,
+      orderInfo.id,
       handOverTime
     );
 
-    // Step 6: Return success response with driver info
+    // Step 7: Return success response with driver info
     res.status(201).json({
       status: "success",
       message: "Order assigned successfully to your target list",
@@ -91,6 +101,8 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
     } else if (error.message.includes("Unauthorized")) {
       statusCode = 401;
     } else if (error.message.includes("required")) {
+      statusCode = 400;
+    } else if (error.message.includes("Still processing")) {
       statusCode = 400;
     }
 
@@ -184,10 +196,15 @@ exports.GetOrderUserDetails = asyncHandler(async (req, res) => {
 
     // Convert comma-separated string to array
     let orderIdArray = [];
-    if (typeof orderIds === 'string') {
-      orderIdArray = orderIds.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+    if (typeof orderIds === "string") {
+      orderIdArray = orderIds
+        .split(",")
+        .map((id) => parseInt(id.trim()))
+        .filter((id) => !isNaN(id));
     } else if (Array.isArray(orderIds)) {
-      orderIdArray = orderIds.map(id => parseInt(id)).filter(id => !isNaN(id));
+      orderIdArray = orderIds
+        .map((id) => parseInt(id))
+        .filter((id) => !isNaN(id));
     }
 
     if (orderIdArray.length === 0) {
@@ -203,7 +220,7 @@ exports.GetOrderUserDetails = asyncHandler(async (req, res) => {
       orderIdArray
     );
 
-      console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(result, null, 2));
 
     if (!result || !result.user) {
       return res.status(404).json({
@@ -235,7 +252,7 @@ exports.StartJourney = asyncHandler(async (req, res) => {
   }
 
   const driverId = req.user.id;
-  const { orderIds } = req.body; 
+  const { orderIds } = req.body;
 
   try {
     // Validate orderIds parameter
@@ -248,10 +265,15 @@ exports.StartJourney = asyncHandler(async (req, res) => {
 
     // Convert to array
     let orderIdArray = [];
-    if (typeof orderIds === 'string') {
-      orderIdArray = orderIds.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+    if (typeof orderIds === "string") {
+      orderIdArray = orderIds
+        .split(",")
+        .map((id) => parseInt(id.trim()))
+        .filter((id) => !isNaN(id));
     } else if (Array.isArray(orderIds)) {
-      orderIdArray = orderIds.map(id => parseInt(id)).filter(id => !isNaN(id));
+      orderIdArray = orderIds
+        .map((id) => parseInt(id))
+        .filter((id) => !isNaN(id));
     }
 
     if (orderIdArray.length === 0) {
@@ -261,26 +283,28 @@ exports.StartJourney = asyncHandler(async (req, res) => {
       });
     }
 
-    console.log("Starting journey for driver:", driverId, "with order IDs:", orderIdArray);
-
-    // Start the journey
-    const result = await orderDao.startJourneyDAO(
+    console.log(
+      "Starting journey for driver:",
       driverId,
+      "with order IDs:",
       orderIdArray
     );
+
+    // Start the journey
+    const result = await orderDao.startJourneyDAO(driverId, orderIdArray);
 
     if (result.success) {
       res.status(200).json({
         status: "success",
         message: result.message,
         data: {
-          updatedOrders: result.updatedOrders
-        }
+          updatedOrders: result.updatedOrders,
+        },
       });
     } else {
       res.status(400).json({
         status: "error",
-        message: result.message
+        message: result.message,
       });
     }
   } catch (error) {
@@ -292,26 +316,30 @@ exports.StartJourney = asyncHandler(async (req, res) => {
   }
 });
 
-// Save Signature 
+// Save Signature
 exports.saveSignature = asyncHandler(async (req, res) => {
   try {
     // Get driver ID from token
     const driverId = req.user.id;
-    
+
     if (!driverId) {
       return res.status(401).json({
         status: "error",
-        message: "Unauthorized: Driver authentication required"
+        message: "Unauthorized: Driver authentication required",
       });
     }
 
     // Get process order IDs from request body
     const { processOrderIds } = req.body;
 
-    if (!processOrderIds || !Array.isArray(processOrderIds) || processOrderIds.length === 0) {
+    if (
+      !processOrderIds ||
+      !Array.isArray(processOrderIds) ||
+      processOrderIds.length === 0
+    ) {
       return res.status(400).json({
         status: "error",
-        message: "processOrderIds array is required"
+        message: "processOrderIds array is required",
       });
     }
 
@@ -319,26 +347,29 @@ exports.saveSignature = asyncHandler(async (req, res) => {
     if (!req.file) {
       return res.status(400).json({
         status: "error",
-        message: "Signature image is required"
+        message: "Signature image is required",
       });
     }
 
     // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png'];
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png"];
     if (!allowedTypes.includes(req.file.mimetype)) {
       return res.status(400).json({
         status: "error",
-        message: "Only JPEG, JPG, and PNG images are allowed"
+        message: "Only JPEG, JPG, and PNG images are allowed",
       });
     }
 
     // Verify driver has access to these orders
-    const verification = await orderDao.verifyDriverAccessToOrdersDAO(driverId, processOrderIds);
-    
+    const verification = await orderDao.verifyDriverAccessToOrdersDAO(
+      driverId,
+      processOrderIds
+    );
+
     if (!verification.hasAccess) {
       return res.status(403).json({
         status: "error",
-        message: `You don't have access to all requested orders. Accessible: ${verification.accessibleCount}/${verification.totalRequested}`
+        message: `You don't have access to all requested orders. Accessible: ${verification.accessibleCount}/${verification.totalRequested}`,
       });
     }
 
@@ -346,7 +377,7 @@ exports.saveSignature = asyncHandler(async (req, res) => {
     const signatureUrl = await uploadFileToS3(
       req.file.buffer,
       req.file.originalname,
-      "signatures" 
+      "signatures"
     );
 
     // Save signature and update order statuses
@@ -364,15 +395,14 @@ exports.saveSignature = asyncHandler(async (req, res) => {
         driverOrdersUpdated: result.driverOrdersUpdated,
         processOrdersUpdated: result.processOrdersUpdated,
         updatedOrders: result.updatedOrders,
-        timestamp: new Date().toISOString()
-      }
+        timestamp: new Date().toISOString(),
+      },
     });
-
   } catch (error) {
     console.error("Error in saveSignature endpoint:", error);
     res.status(500).json({
       status: "error",
-      message: error.message || "Failed to save signature and update orders"
+      message: error.message || "Failed to save signature and update orders",
     });
   }
 });
