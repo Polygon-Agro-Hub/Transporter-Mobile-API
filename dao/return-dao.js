@@ -790,12 +790,14 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
 
         // Step 2: Update driverorders table - set drvStatus to 'Return Received'
         const updateDriverOrdersSql = `
-        UPDATE collection_officer.driverorders 
-        SET drvStatus = 'Return Received'
-        WHERE id IN (?)
-          AND driverId = ?
-          AND drvStatus = 'Return'
-      `;
+          UPDATE collection_officer.driverorders 
+          SET 
+            drvStatus = 'Return Received',
+            receivedTime = NOW()
+          WHERE id IN (?)
+            AND driverId = ?
+            AND drvStatus = 'Return'
+        `;
 
         console.log("Update Driver SQL:", updateDriverOrdersSql);
         console.log("Update Driver Params:", [driverOrderIds, driverId]);
