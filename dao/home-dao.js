@@ -165,22 +165,96 @@ exports.getOfficerByEmpId = async (empId) => {
 };
 
 // Update Received Cash (unchanged)
-exports.handOverCash = async (driverOrderIds, officerId, totalAmount) => {
+// exports.handOverCash = async (driverOrderIds, officerId, totalAmount) => {
+//   return new Promise((resolve, reject) => {
+//     const sql = `
+//             UPDATE collection_officer.driverorders
+//             SET 
+//                 isHandOver = 1,
+//                 handOverOfficer = ?,
+//                 handOverTime = NOW(),
+//                 handOverPrice = ?
+//             WHERE 
+//                 id IN (?)
+//                 AND isHandOver = 0
+//         `;
+//     db.collectionofficer.query(
+//       sql,
+//       [officerId, totalAmount, driverOrderIds],
+//       (err, results) => {
+//         if (err) {
+//           console.error("Database error updating hand over:", err.message);
+//           return reject(new Error("Failed to hand over cash"));
+//         }
+
+//         console.log("Hand over update results:", results);
+
+//         if (results.affectedRows === 0) {
+//           return reject(new Error("No orders were updated"));
+//         }
+
+//         resolve(results);
+//       }
+//     );
+//   });
+// };
+
+// New DAO method to get order amounts
+// New DAO method to get order amounts
+exports.getOrderAmounts = async (orderIds) => {
   return new Promise((resolve, reject) => {
     const sql = `
-            UPDATE collection_officer.driverorders
-            SET 
-                isHandOver = 1,
-                handOverOfficer = ?,
-                handOverTime = NOW(),
-                handOverPrice = ?
-            WHERE 
-                id IN (?)
-                AND isHandOver = 0
-        `;
+      SELECT 
+        do.id,
+        COALESCE(o.fullTotal, 0) as amount
+      FROM 
+        collection_officer.driverorders do
+      INNER JOIN 
+        market_place.processorders po ON do.orderId = po.id
+      INNER JOIN 
+        market_place.orders o ON po.orderId = o.id
+      WHERE 
+        do.id IN (?)
+        AND do.isHandOver = 0
+        AND o.fullTotal IS NOT NULL
+        AND o.fullTotal > 0
+    `;
+
+    db.collectionofficer.query(sql, [orderIds], (err, results) => {
+      if (err) {
+        console.error("Database error getting order amounts:", err.message);
+        return reject(new Error("Failed to retrieve order amounts"));
+      }
+      resolve(results);
+    });
+  });
+};
+
+// Updated handOverCash method
+exports.handOverCash = async (orderDetails, officerId) => {
+  return new Promise((resolve, reject) => {
+    // Build CASE statement for individual amounts
+    const caseStatements = orderDetails.map(order =>
+      `WHEN id = ${order.id} THEN ${order.amount}`
+    ).join(' ');
+
+    const orderIds = orderDetails.map(order => order.id);
+
+    const sql = `
+      UPDATE collection_officer.driverorders
+      SET 
+        isHandOver = 1,
+        handOverOfficer = ?,
+        handOverTime = NOW(),
+        handOverPrice = CASE ${caseStatements} END
+      WHERE 
+        id IN (?)
+        AND isHandOver = 0
+    `;
+
     db.collectionofficer.query(
       sql,
-      [officerId, totalAmount, driverOrderIds],
+      [officerId, orderIds],
       (err, results) => {
         if (err) {
           console.error("Database error updating hand over:", err.message);
