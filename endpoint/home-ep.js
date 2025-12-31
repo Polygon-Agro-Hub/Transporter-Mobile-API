@@ -73,6 +73,70 @@ exports.getReceivedCash = asyncHandler(async (req, res) => {
 
 // update hand Over 
 
+// exports.handOverCash = asyncHandler(async (req, res) => {
+//     if (!req.user || !req.user.id) {
+//         return res.status(401).json({
+//             status: "error",
+//             message: "Unauthorized: User authentication required"
+//         });
+//     }
+
+
+
+//     const { orderIds, totalAmount, officerId } = req.body; // Changed from officerId to empId
+
+//     const empId = officerId;
+//     const driverId = req.user.id;
+
+//     if (!orderIds || orderIds.length === 0) {
+//         return res.status(400).json({
+//             status: "error",
+//             message: "No orders selected"
+//         });
+//     }
+
+//     if (!empId) {
+//         return res.status(400).json({
+//             status: "error",
+//             message: "Officer Employee ID is required"
+//         });
+//     }
+
+//     console.log("Hand over request:", { orderIds, totalAmount, empId, driverId });
+
+//     try {
+//         // Get officer ID from empId
+//         const officer = await homeDao.getOfficerByEmpId(empId);
+//         if (!officer) {
+//             return res.status(404).json({
+//                 status: "error",
+//                 message: "Officer not found in the system"
+//             });
+//         }
+
+//         const officerId = officer.id;
+
+//         await homeDao.handOverCash(orderIds, officerId, totalAmount);
+
+//         res.status(200).json({
+//             status: "success",
+//             message: "Cash handed over successfully",
+//             data: {
+//                 empId,
+//                 officerId,
+//                 totalAmount,
+//                 orderCount: orderIds.length
+//             }
+//         });
+//     } catch (error) {
+//         console.error("Error handing over cash:", error.message);
+//         res.status(500).json({
+//             status: "error",
+//             message: "Failed to hand over cash. Please try again.",
+//         });
+//     }
+// });
+
 exports.handOverCash = asyncHandler(async (req, res) => {
     if (!req.user || !req.user.id) {
         return res.status(401).json({
@@ -81,10 +145,7 @@ exports.handOverCash = asyncHandler(async (req, res) => {
         });
     }
 
-
-
-    const { orderIds, totalAmount, officerId } = req.body; // Changed from officerId to empId
-
+    const { orderIds, totalAmount, officerId } = req.body;
     const empId = officerId;
     const driverId = req.user.id;
 
@@ -116,7 +177,18 @@ exports.handOverCash = asyncHandler(async (req, res) => {
 
         const officerId = officer.id;
 
-        await homeDao.handOverCash(orderIds, officerId, totalAmount);
+        // Get the individual order amounts before updating
+        const orderDetails = await homeDao.getOrderAmounts(orderIds);
+
+        if (!orderDetails || orderDetails.length === 0) {
+            return res.status(404).json({
+                status: "error",
+                message: "Orders not found"
+            });
+        }
+
+        // Update each order with its individual amount
+        await homeDao.handOverCash(orderDetails, officerId);
 
         res.status(200).json({
             status: "success",
