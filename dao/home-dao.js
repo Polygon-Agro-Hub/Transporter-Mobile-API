@@ -93,7 +93,7 @@ exports.getAmount = async (driverId) => {
 };
 
 // Get Reveived Cash
-exports.getReceivedCash = async (driverId) => {
+exports.getReceivedCash = async (driverId, paymentMethod = 'Cash') => {
   return new Promise((resolve, reject) => {
     const sql = `
             SELECT 
@@ -116,11 +116,12 @@ exports.getReceivedCash = async (driverId) => {
                 AND do.drvStatus = 'Completed'
                 AND o.fullTotal IS NOT NULL
                 AND o.fullTotal > 0
+                AND po.paymentMethod = ?  
             ORDER BY 
                 do.createdAt DESC
         `;
 
-    db.collectionofficer.query(sql, [driverId], (err, results) => {
+    db.collectionofficer.query(sql, [driverId, paymentMethod], (err, results) => {
       if (err) {
         console.error("Database error fetching amount:", err.message);
         return reject(new Error("Failed to fetch amount"));
