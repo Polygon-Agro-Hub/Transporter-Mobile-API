@@ -4,7 +4,7 @@
   "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon api/index.js",
+    "start": "node api/index.js",
     "dev": "nodemon server.js",
     "seed": "node seed/mainseed.js"
   },
@@ -13,6 +13,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.955.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
@@ -20,7 +21,9 @@
     "express-async-handler": "^1.2.0",
     "joi": "^18.0.2",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
     "mysql2": "^3.15.3",
-    "nodemon": "^3.1.11"
+    "nodemon": "^3.1.11",
+    "uuid": "^8.3.2"
   }
 }

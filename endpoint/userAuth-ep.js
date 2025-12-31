@@ -2,6 +2,7 @@ const userDao = require("../dao/userAuth-dao");
 const jwt = require("jsonwebtoken");
 const { loginSchema } = require("../validations/userAuth-validations");
 const asyncHandler = require("express-async-handler");
+const uploadFileToS3 = require("../middlewares/s3upload");
 
 // Login User
 exports.login = asyncHandler(async (req, res) => {
@@ -111,33 +112,127 @@ exports.changePassword = asyncHandler(async (req, res) => {
 exports.getProfile = asyncHandler(async (req, res) => {
   try {
     console.log("Getting profile for user:", req.user);
-    
+
     // Use empId from the decoded token
     const empId = req.user.empId;
-    
+
     if (!empId) {
       return res.status(400).json({
         success: false,
-        message: "Employee ID not found in token"
+        message: "Employee ID not found in token",
       });
     }
 
     console.log("Fetching profile for empId:", empId);
-    
+
     const userProfile = await userDao.getUserProfile(empId);
-    
+
     console.log("User profile fetched successfully");
 
     return res.status(200).json({
       success: true,
       message: "User profile fetched successfully",
-      data: userProfile
+      data: userProfile,
     });
   } catch (err) {
     console.error("Get profile failed:", err.message);
-    return res.status(404).json({ 
-      success: false, 
-      message: err.message 
+    return res.status(404).json({
+      success: false,
+      message: err.message,
+    });
+  }
+});
+
+// Update Profile Image
+exports.updateProfileImage = asyncHandler(async (req, res) => {
+  try {
+    console.log("Updating profile image for user:", req.user);
+
+    // Check if file was uploaded
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Profile image is required",
+      });
+    }
+
+    // Validate file type
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png"];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: "Only JPEG, JPG, and PNG images are allowed",
+      });
+    }
+
+    // Validate file size (max 5MB)
+    const maxSize = 5 * 1024 * 1024; // 5MB in bytes
+    if (req.file.size > maxSize) {
+      return res.status(400).json({
+        success: false,
+        message: "Image size should not exceed 5MB",
+      });
+    }
+
+    // Get empId from token
+    const empId = req.user.empId;
+
+    if (!empId) {
+      return res.status(400).json({
+        success: false,
+        message: "Employee ID not found in token",
+      });
+    }
+
+    console.log("Updating profile image for empId:", empId);
+
+    // Get current user info to check if they have an existing image
+    const currentProfile = await userDao.getUserProfile(empId);
+
+    // Delete old image from R2 if exists
+    if (currentProfile.image && currentProfile.image !== "") {
+      try {
+        await deleteFromR2(currentProfile.image);
+        console.log("Old profile image deleted successfully");
+      } catch (deleteError) {
+        console.warn("Failed to delete old image:", deleteError.message);
+        // Continue with upload even if delete fails
+      }
+    }
+
+    // Upload new image to R2
+    const fileBuffer = req.file.buffer;
+    const fileName = req.file.originalname;
+    const keyPrefix = "users/profile-images";
+
+    const imageUrl = await uploadFileToS3(fileBuffer, fileName, keyPrefix);
+    console.log("New image uploaded to:", imageUrl);
+
+    // Update profile image in database
+    const result = await userDao.updateProfileImage(empId, imageUrl);
+
+    if (!result.success) {
+      return res.status(404).json({
+        success: false,
+        message: result.message,
+      });
+    }
+
+    console.log("Profile image updated successfully");
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile image updated successfully",
+      data: {
+        imageUrl: imageUrl,
+        empId: empId,
+      },
+    });
+  } catch (err) {
+    console.error("Update profile image failed:", err.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update profile image: " + err.message,
     });
   }
 });
