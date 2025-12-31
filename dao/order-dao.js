@@ -36,7 +36,7 @@ exports.GetProcessOrderInfoByInvNo = async (invNo) => {
 exports.SaveDriverOrder = async (driverId, processOrderId) => {
   return new Promise(async (resolve, reject) => {
     try {
-      // STEP 1: Insert driver order 
+      // STEP 1: Insert driver order
       const insertSql = `
         INSERT INTO collection_officer.driverorders
         (driverId, orderId, drvStatus, isHandOver, createdAt)
@@ -776,87 +776,178 @@ exports.saveSignatureAndUpdateStatusDAO = async (
           );
         }
 
-        // 1. Update driverorders table - set signature and drvStatus
-        const updateDriverOrdersQuery = `
-          UPDATE driverorders 
-          SET signature = ?, drvStatus = 'Completed'
-          WHERE orderId IN (?)
+        // First, fetch payment method and orderId for each process order
+        const fetchPaymentDetailsQuery = `
+          SELECT po.id as processOrderId, po.paymentMethod, po.orderId, o.fullTotal
+          FROM market_place.processorders po
+          JOIN market_place.orders o ON po.orderId = o.id
+          WHERE po.id IN (?)
         `;
 
-        console.log("Updating driverorders with signature:", {
-          processOrderIds: processOrderIds,
-          signaturePath: signaturePath,
-        });
-
-        // Execute the first update
         connection.query(
-          updateDriverOrdersQuery,
-          [signaturePath, processOrderIds],
-          (queryErr1, result1) => {
-            if (queryErr1) {
+          fetchPaymentDetailsQuery,
+          [processOrderIds],
+          (fetchErr, paymentDetails) => {
+            if (fetchErr) {
               return connection.rollback(() => {
                 connection.release();
-                console.error("Error updating driverorders:", queryErr1);
+                console.error("Error fetching payment details:", fetchErr);
                 reject(
                   new Error(
-                    `Failed to update driverorders: ${queryErr1.message}`
+                    `Failed to fetch payment details: ${fetchErr.message}`
                   )
                 );
               });
             }
 
-            // 2. Update processorders table - set status to 'Delivered'
-            const updateProcessOrdersQuery = `
-            UPDATE market_place.processorders 
-            SET status = 'Delivered'
-            WHERE id IN (?)
-          `;
+            // Separate cash and non-cash orders
+            const cashOrders = paymentDetails.filter(
+              (order) => order.paymentMethod === "Cash"
+            );
+            const nonCashOrders = paymentDetails.filter(
+              (order) => order.paymentMethod !== "Cash"
+            );
 
-            // Use the same connection but specify the database in the query
+            const cashOrderIds = cashOrders.map(
+              (order) => order.processOrderId
+            );
+            const nonCashOrderIds = nonCashOrders.map(
+              (order) => order.processOrderId
+            );
+
+            // 1. Update driverorders table - set signature and drvStatus
+            const updateDriverOrdersQuery = `
+              UPDATE driverorders 
+              SET signature = ?, drvStatus = 'Completed'
+              WHERE orderId IN (?)
+            `;
+
+            // Execute the first update
             connection.query(
-              updateProcessOrdersQuery,
-              [processOrderIds],
-              (queryErr2, result2) => {
-                if (queryErr2) {
+              updateDriverOrdersQuery,
+              [signaturePath, processOrderIds],
+              (queryErr1, result1) => {
+                if (queryErr1) {
                   return connection.rollback(() => {
                     connection.release();
-                    console.error("Error updating processorders:", queryErr2);
+                    console.error("Error updating driverorders:", queryErr1);
                     reject(
                       new Error(
-                        `Failed to update processorders: ${queryErr2.message}`
+                        `Failed to update driverorders: ${queryErr1.message}`
                       )
                     );
                   });
                 }
 
-                // Commit transaction
-                connection.commit((commitErr) => {
-                  if (commitErr) {
+                // 2. Update processorders table - set status to 'Delivered' and handle cash payments
+                let updatePromises = [];
+
+                // Update ALL orders to 'Delivered' status
+                const updateAllOrdersStatusQuery = `
+                  UPDATE market_place.processorders 
+                  SET status = 'Delivered'
+                  WHERE id IN (?)
+                `;
+
+                updatePromises.push(
+                  new Promise((resolve, reject) => {
+                    connection.query(
+                      updateAllOrdersStatusQuery,
+                      [processOrderIds],
+                      (err, result) => {
+                        if (err) reject(err);
+                        else resolve({ type: "status", result: result });
+                      }
+                    );
+                  })
+                );
+
+                // Update cash orders: set isPaid = 1 and amount = fullTotal
+                if (cashOrderIds.length > 0) {
+                  const updateCashOrdersQuery = `
+                    UPDATE market_place.processorders po
+                    JOIN market_place.orders o ON po.orderId = o.id
+                    SET po.isPaid = 1, po.amount = o.fullTotal
+                    WHERE po.id IN (?)
+                  `;
+
+                  updatePromises.push(
+                    new Promise((resolve, reject) => {
+                      connection.query(
+                        updateCashOrdersQuery,
+                        [cashOrderIds],
+                        (err, result) => {
+                          if (err) reject(err);
+                          else resolve({ type: "cash", result: result });
+                        }
+                      );
+                    })
+                  );
+                }
+
+                // Execute all update promises
+                Promise.all(updatePromises)
+                  .then((results) => {
+                    // Commit transaction
+                    connection.commit((commitErr) => {
+                      if (commitErr) {
+                        return connection.rollback(() => {
+                          connection.release();
+                          console.error(
+                            "Error committing transaction:",
+                            commitErr
+                          );
+                          reject(
+                            new Error(
+                              `Failed to commit transaction: ${commitErr.message}`
+                            )
+                          );
+                        });
+                      }
+
+                      connection.release();
+
+                      // Parse results
+                      let statusUpdateResult = results.find(
+                        (r) => r.type === "status"
+                      )?.result;
+                      let cashUpdateResult = results.find(
+                        (r) => r.type === "cash"
+                      )?.result;
+
+                      console.log("Signature update successful:", {
+                        driverOrdersUpdated: result1.affectedRows,
+                        processOrdersUpdated:
+                          statusUpdateResult?.affectedRows || 0,
+                        cashOrdersUpdated: cashUpdateResult?.affectedRows || 0,
+                        totalOrders: processOrderIds.length,
+                        cashOrdersCount: cashOrderIds.length,
+                        nonCashOrdersCount: nonCashOrderIds.length,
+                      });
+
+                      resolve({
+                        driverOrdersUpdated: result1.affectedRows,
+                        processOrdersUpdated:
+                          statusUpdateResult?.affectedRows || 0,
+                        cashOrdersUpdated: cashUpdateResult?.affectedRows || 0,
+                        signatureUrl: signaturePath,
+                        totalOrders: processOrderIds.length,
+                        cashOrdersCount: cashOrderIds.length,
+                        nonCashOrdersCount: nonCashOrderIds.length,
+                      });
+                    });
+                  })
+                  .catch((promiseErr) => {
                     return connection.rollback(() => {
                       connection.release();
-                      console.error("Error committing transaction:", commitErr);
+                      console.error("Error in update promises:", promiseErr);
                       reject(
                         new Error(
-                          `Failed to commit transaction: ${commitErr.message}`
+                          `Failed to update process orders: ${promiseErr.message}`
                         )
                       );
                     });
-                  }
-
-                  connection.release();
-
-                  console.log("Signature update successful:", {
-                    driverOrdersUpdated: result1.affectedRows,
-                    processOrdersUpdated: result2.affectedRows,
-                    totalOrders: processOrderIds.length,
                   });
-
-                  resolve({
-                    driverOrdersUpdated: result1.affectedRows,
-                    processOrdersUpdated: result2.affectedRows,
-                    totalOrders: processOrderIds.length,
-                  });
-                });
               }
             );
           }
