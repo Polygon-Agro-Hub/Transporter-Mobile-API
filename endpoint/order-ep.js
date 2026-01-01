@@ -3,6 +3,117 @@ const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
 
 // Assign Driver Order
+// exports.assignDriverOrder = asyncHandler(async (req, res) => {
+//   if (!req.user || !req.user.id) {
+//     return res.status(401).json({
+//       status: "error",
+//       message: "Unauthorized: User authentication required",
+//     });
+//   }
+
+//   const driverId = req.user.id;
+//   const { invNo } = req.body;
+
+//   // Validate input
+//   if (!invNo || invNo.trim() === "") {
+//     return res.status(400).json({
+//       status: "error",
+//       message: "Invoice number is required",
+//     });
+//   }
+
+//   try {
+//     // Step 1: Get driver's empId for response
+//     const driverEmpId = await orderDao.GetDriverEmpId(driverId);
+
+//     // Step 2: Get process order ID and check status by invoice number
+//     const orderInfo = await orderDao.GetProcessOrderInfoByInvNo(invNo);
+
+//     // Step 3: Check if order status is "Out For Delivery"
+//     if (orderInfo.status !== "Out For Delivery") {
+//       return res.status(400).json({
+//         status: "error",
+//         message:
+//           "Still processing this order. Scanning will be available after it's set to Out For Delivery.",
+//         currentStatus: orderInfo.status,
+//       });
+//     }
+
+//     // Step 4: Check if order is already assigned to any driver
+//     const assignmentCheck = await orderDao.CheckOrderAlreadyAssigned(
+//       orderInfo.id,
+//       driverId
+//     );
+
+//     console.log(result)
+
+//     if (assignmentCheck.isAssigned) {
+//       // Return specific error messages based on assignment
+//       if (assignmentCheck.assignedToSameDriver) {
+//         return res.status(409).json({
+//           status: "error",
+//           message: assignmentCheck.message,
+//           driverEmpId: driverEmpId,
+//         });
+//       } else {
+//         return res.status(409).json({
+//           status: "error",
+//           message: assignmentCheck.message,
+//           assignedDriverEmpId: assignmentCheck.assignedDriverEmpId,
+//           assignedDriverName: assignmentCheck.assignedDriverName,
+//         });
+//       }
+//     }
+
+//     // Step 5: Generate handOverTime (current time + 24 hours)
+//     const handOverTime = new Date();
+//     handOverTime.setHours(handOverTime.getHours() + 24);
+
+//     // Step 6: Save driver order
+//     const result = await orderDao.SaveDriverOrder(
+//       driverId,
+//       orderInfo.id,
+//       handOverTime
+//     );
+
+//     // Step 7: Return success response with driver info
+//     res.status(201).json({
+//       status: "success",
+//       message: "Order assigned successfully to your target list",
+//       data: {
+//         ...result,
+//         driverEmpId: driverEmpId,
+//         assignedAt: new Date().toISOString(),
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Error assigning driver order:", error.message);
+
+//     // Determine appropriate status code
+//     let statusCode = 500;
+//     let errorMessage = error.message;
+
+//     if (error.message.includes("not found")) {
+//       statusCode = 404;
+//     } else if (
+//       error.message.includes("already assigned") ||
+//       error.message.includes("already in your target list")
+//     ) {
+//       statusCode = 409;
+//     } else if (error.message.includes("Unauthorized")) {
+//       statusCode = 401;
+//     } else if (error.message.includes("required")) {
+//       statusCode = 400;
+//     } else if (error.message.includes("Still processing")) {
+//       statusCode = 400;
+//     }
+
+//     res.status(statusCode).json({
+//       status: "error",
+//       message: errorMessage,
+//     });
+//   }
+// });
 exports.assignDriverOrder = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
     return res.status(401).json({
@@ -29,17 +140,8 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
     // Step 2: Get process order ID and check status by invoice number
     const orderInfo = await orderDao.GetProcessOrderInfoByInvNo(invNo);
 
-    // Step 3: Check if order status is "Out For Delivery"
-    if (orderInfo.status !== "Out For Delivery") {
-      return res.status(400).json({
-        status: "error",
-        message:
-          "Still processing this order. Scanning will be available after it's set to Out For Delivery.",
-        currentStatus: orderInfo.status,
-      });
-    }
-
-    // Step 4: Check if order is already assigned to any driver
+    // Step 3: Check if order is already assigned to any driver FIRST
+    // This should happen BEFORE checking "Out For Delivery" status
     const assignmentCheck = await orderDao.CheckOrderAlreadyAssigned(
       orderInfo.id,
       driverId
@@ -50,17 +152,28 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
       if (assignmentCheck.assignedToSameDriver) {
         return res.status(409).json({
           status: "error",
-          message: assignmentCheck.message,
+          message: "This order is already in your target list.",
           driverEmpId: driverEmpId,
         });
       } else {
         return res.status(409).json({
           status: "error",
-          message: assignmentCheck.message,
+          message: `This order has already been collected by another officer (Officer ID: ${assignmentCheck.assignedDriverEmpId}).`,
           assignedDriverEmpId: assignmentCheck.assignedDriverEmpId,
           assignedDriverName: assignmentCheck.assignedDriverName,
         });
       }
+    }
+
+    // Step 4: NOW check if order status is "Out For Delivery"
+    // Only check this if order is NOT already assigned
+    if (orderInfo.status !== "Out For Delivery") {
+      return res.status(400).json({
+        status: "error",
+        message:
+          "Still processing this order. Scanning will be available after it's set to Out For Delivery.",
+        currentStatus: orderInfo.status,
+      });
     }
 
     // Step 5: Generate handOverTime (current time + 24 hours)
@@ -95,7 +208,8 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
       statusCode = 404;
     } else if (
       error.message.includes("already assigned") ||
-      error.message.includes("already in your target list")
+      error.message.includes("already in your target list") ||
+      error.message.includes("already been collected")
     ) {
       statusCode = 409;
     } else if (error.message.includes("Unauthorized")) {
