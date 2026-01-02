@@ -1,7 +1,7 @@
 const db = require("../startup/database");
 
-// Get My Amount
-// Get My Amount DAO
+
+
 // exports.getAmount = async (driverId) => {
 //   return new Promise((resolve, reject) => {
 //     const sql = `
@@ -84,14 +84,65 @@ const db = require("../startup/database");
 //           .filter((id) => !isNaN(id));
 //       }
 
-//       resolve({
-//         ...result,
-//         ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
+//       // NOW: Get unique locations count for pending orders (Todo, Hold, On the way)
+//       const locationSql = `
+//         SELECT COUNT(DISTINCT locationKey) as uniqueLocationsCount
+//         FROM (
+//           -- Get House addresses
+//           SELECT 
+//             CONCAT(oh.houseNo, '-', oh.streetName, '-', oh.city) as locationKey
+//           FROM collection_officer.driverorders do
+//           INNER JOIN market_place.processorders po ON do.orderId = po.id
+//           INNER JOIN market_place.orders o ON po.orderId = o.id
+//           INNER JOIN market_place.orderhouse oh ON o.id = oh.orderId
+//           WHERE 
+//             do.driverId = ?
+//             AND DATE(do.createdAt) = CURDATE()
+//             AND do.isHandOver = 0
+//             AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
+//             AND o.buildingType = 'House'
+
+//           UNION ALL
+
+//           -- Get Apartment addresses
+//           SELECT 
+//             CONCAT(oa.buildingNo, '-', oa.buildingName, '-', oa.streetName, '-', oa.city) as locationKey
+//           FROM collection_officer.driverorders do
+//           INNER JOIN market_place.processorders po ON do.orderId = po.id
+//           INNER JOIN market_place.orders o ON po.orderId = o.id
+//           INNER JOIN market_place.orderapartment oa ON o.id = oa.orderId
+//           WHERE 
+//             do.driverId = ?
+//             AND DATE(do.createdAt) = CURDATE()
+//             AND do.isHandOver = 0
+//             AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
+//             AND o.buildingType = 'Apartment'
+//         ) as allLocations
+//       `;
+
+//       db.collectionofficer.query(locationSql, [driverId, driverId], (locErr, locResults) => {
+//         if (locErr) {
+//           console.error("Database error fetching unique locations:", locErr.message);
+//           // If location query fails, return 0 but don't fail the whole request
+//           resolve({
+//             ...result,
+//             ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
+//             uniqueLocationsCount: 0,
+//           });
+//           return;
+//         }
+
+//         const uniqueLocationsCount = locResults[0]?.uniqueLocationsCount || 0;
+
+//         resolve({
+//           ...result,
+//           ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
+//           uniqueLocationsCount: uniqueLocationsCount,
+//         });
 //       });
 //     });
 //   });
 // };
-
 exports.getAmount = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -126,13 +177,12 @@ exports.getAmount = async (driverId) => {
           END
         ) as cashOrders,
 
-        -- Get process order IDs for ongoing orders (On the way)
+        -- Get process order IDs for ongoing orders (On the way) - NO DATE FILTER
         (
           SELECT GROUP_CONCAT(DISTINCT do2.orderId ORDER BY do2.orderId)
           FROM collection_officer.driverorders do2
           WHERE do2.driverId = ?
             AND do2.drvStatus = 'On the way'
-            AND DATE(do2.createdAt) = CURDATE()
             AND do2.isHandOver = 0
         ) as ongoingProcessOrderIds
 
@@ -141,7 +191,6 @@ exports.getAmount = async (driverId) => {
       INNER JOIN market_place.orders o ON po.orderId = o.id
       WHERE 
         do.driverId = ?
-        AND DATE(do.createdAt) = CURDATE()
         AND do.isHandOver = 0
       GROUP BY do.driverId;
     `;
@@ -174,7 +223,7 @@ exports.getAmount = async (driverId) => {
           .filter((id) => !isNaN(id));
       }
 
-      // NOW: Get unique locations count for pending orders (Todo, Hold, On the way)
+      // Get unique locations count for ALL pending orders (Todo, Hold, On the way) - NO DATE FILTER
       const locationSql = `
         SELECT COUNT(DISTINCT locationKey) as uniqueLocationsCount
         FROM (
@@ -187,7 +236,6 @@ exports.getAmount = async (driverId) => {
           INNER JOIN market_place.orderhouse oh ON o.id = oh.orderId
           WHERE 
             do.driverId = ?
-            AND DATE(do.createdAt) = CURDATE()
             AND do.isHandOver = 0
             AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
             AND o.buildingType = 'House'
@@ -203,7 +251,6 @@ exports.getAmount = async (driverId) => {
           INNER JOIN market_place.orderapartment oa ON o.id = oa.orderId
           WHERE 
             do.driverId = ?
-            AND DATE(do.createdAt) = CURDATE()
             AND do.isHandOver = 0
             AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
             AND o.buildingType = 'Apartment'
