@@ -177,7 +177,7 @@ exports.GetDriverEmpId = async (driverId) => {
 // exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
 //   return new Promise((resolve, reject) => {
 //     let sql = `
-//       SELECT 
+//       SELECT
 //         do.id as driverOrderId,
 //         do.drvStatus,
 //         do.isHandOver,
@@ -197,7 +197,7 @@ exports.GetDriverEmpId = async (driverId) => {
 //         oh.houseNo as house_houseNo,
 //         oh.streetName as house_streetName,
 //         oh.city as house_city,
-//         -- Apartment address details  
+//         -- Apartment address details
 //         oa.buildingNo as apartment_buildingNo,
 //         oa.buildingName as apartment_buildingName,
 //         oa.unitNo as apartment_unitNo,
@@ -522,12 +522,15 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         let addressKey = `${userId}_`;
 
         if (buildingType === "House") {
-          addressKey += `HOUSE_${order.house_houseNo || ""}_${order.house_streetName || ""
-            }_${order.house_city || ""}`;
+          addressKey += `HOUSE_${order.house_houseNo || ""}_${
+            order.house_streetName || ""
+          }_${order.house_city || ""}`;
         } else if (buildingType === "Apartment") {
-          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${order.apartment_buildingName || ""
-            }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${order.apartment_streetName || ""
-            }_${order.apartment_city || ""}`;
+          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${
+            order.apartment_buildingName || ""
+          }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${
+            order.apartment_streetName || ""
+          }_${order.apartment_city || ""}`;
         } else {
           addressKey += `OTHER_${order.orderId}`; // No address or other type
         }
@@ -567,12 +570,12 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             addressDetails:
               buildingType === "House"
                 ? {
-                  houseNo: order.house_houseNo,
-                  streetName: order.house_streetName,
-                  city: order.house_city,
-                }
+                    houseNo: order.house_houseNo,
+                    streetName: order.house_streetName,
+                    city: order.house_city,
+                  }
                 : buildingType === "Apartment"
-                  ? {
+                ? {
                     buildingNo: order.apartment_buildingNo,
                     buildingName: order.apartment_buildingName,
                     unitNo: order.apartment_unitNo,
@@ -581,7 +584,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
                     streetName: order.apartment_streetName,
                     city: order.apartment_city,
                   }
-                  : null,
+                : null,
           };
         }
 
@@ -596,9 +599,11 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         }
 
         // Collect hold reasons if status is Hold and reason exists
-        if (order.drvStatus === 'Hold' && order.holdReasonId) {
+        if (order.drvStatus === "Hold" && order.holdReasonId) {
           const holdReasonExists = group.holdReasons.some(
-            hr => hr.holdReasonId === order.holdReasonId && hr.driverOrderId === order.driverOrderId
+            (hr) =>
+              hr.holdReasonId === order.holdReasonId &&
+              hr.driverOrderId === order.driverOrderId
           );
 
           if (!holdReasonExists) {
@@ -608,7 +613,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
               indexNo: order.holdReasonIndexNo,
               rsnEnglish: order.holdReasonEnglish,
               rsnSinhala: order.holdReasonSinhala,
-              rsnTamil: order.holdReasonTamil
+              rsnTamil: order.holdReasonTamil,
             });
           }
         }
@@ -657,8 +662,9 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         let formattedAddress = "No Address";
         if (group.buildingType === "House" && group.addressDetails) {
           const addr = group.addressDetails;
-          formattedAddress = `${addr.houseNo || ""}, ${addr.streetName || ""
-            }, ${addr.city || ""}`
+          formattedAddress = `${addr.houseNo || ""}, ${
+            addr.streetName || ""
+          }, ${addr.city || ""}`
             .trim()
             .replace(/^,\s*|\s*,/g, "");
         } else if (group.buildingType === "Apartment" && group.addressDetails) {
@@ -675,8 +681,8 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         }
 
         // Sort hold reasons by indexNo
-        const sortedHoldReasons = group.holdReasons.sort((a, b) =>
-          (a.indexNo || 0) - (b.indexNo || 0)
+        const sortedHoldReasons = group.holdReasons.sort(
+          (a, b) => (a.indexNo || 0) - (b.indexNo || 0)
         );
 
         return {
@@ -902,10 +908,12 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
 // Start Journey DAO
 exports.startJourneyDAO = async (driverId, orderIds) => {
   return new Promise((resolve, reject) => {
-    // First, check if driver already has an order with "On the way" status
+    // Check if driver already has an ongoing journey
     const checkSql = `
-      SELECT COUNT(*) as ongoingCount
-      FROM collection_officer.driverorders
+      SELECT 
+        COUNT(*) as ongoingCount,
+        GROUP_CONCAT(DISTINCT do.orderId) as ongoingOrderIds
+      FROM collection_officer.driverorders do
       WHERE driverId = ?
       AND drvStatus = 'On the way'
       AND isHandOver = 0
@@ -924,27 +932,35 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
         }
 
         const ongoingCount = checkResults[0]?.ongoingCount || 0;
+        const ongoingOrderIds = checkResults[0]?.ongoingOrderIds || "";
 
         if (ongoingCount > 0) {
+          // Split the ongoingOrderIds string into an array
+          const ongoingIdsArray = ongoingOrderIds
+            .split(",")
+            .map((id) => parseInt(id.trim()))
+            .filter((id) => !isNaN(id));
+
           return resolve({
             success: false,
             message:
               "You have one ongoing activity. Please end it, put it on hold, or mark it as returned to start this one.",
+            ongoingProcessOrderIds: ongoingIdsArray, // Return the ongoing order IDs
           });
         }
 
-        // Update driverorders table
+        // Update driverorders → set On the way + startTime
         const updateDriverOrdersSql = `
           UPDATE collection_officer.driverorders
-          SET drvStatus = 'On the way',
-              createdAt = CURRENT_TIMESTAMP
+          SET 
+            drvStatus = 'On the way',
+            startTime = CURRENT_TIMESTAMP
           WHERE driverId = ?
           AND orderId IN (?)
           AND isHandOver = 0
         `;
 
-        console.log("Updating driverorders with SQL:", updateDriverOrdersSql);
-        console.log("Parameters:", [driverId, orderIds]);
+        console.log("Updating driverorders:", [driverId, orderIds]);
 
         db.collectionofficer.query(
           updateDriverOrdersSql,
@@ -955,23 +971,20 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
               return reject(new Error("Failed to update driver orders"));
             }
 
-            console.log(
-              "Driver orders updated. Affected rows:",
-              result1.affectedRows
-            );
+            // Check if any rows were updated
+            if (result1.affectedRows === 0) {
+              return resolve({
+                success: false,
+                message: "No orders found or orders already in progress",
+              });
+            }
 
-            // CORRECTED: Update processorders table using id IN (?) instead of orderId IN (?)
+            // Update processorders status
             const updateProcessOrdersSql = `
               UPDATE market_place.processorders
               SET status = 'On the way'
               WHERE id IN (?)
             `;
-
-            console.log(
-              "Updating processorders with SQL:",
-              updateProcessOrdersSql
-            );
-            console.log("Parameters:", [orderIds]);
 
             db.collectionofficer.query(
               updateProcessOrdersSql,
@@ -982,23 +995,19 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                   return reject(new Error("Failed to update process orders"));
                 }
 
-                console.log(
-                  "Process orders updated. Affected rows:",
-                  result2.affectedRows
-                );
-
-                // Get updated order details for response
+                // Fetch updated records
                 const getUpdatedOrdersSql = `
                   SELECT 
-                    do.id as driverOrderId,
-                    do.orderId as processOrderId,
-                    po.orderId as marketOrderId,
+                    do.id AS driverOrderId,
+                    do.orderId AS processOrderId,
+                    po.orderId AS marketOrderId,
                     po.invNo,
-                    po.status as processStatus,
+                    po.status AS processStatus,
                     do.drvStatus,
-                    do.createdAt as journeyStartedAt
+                    do.startTime AS journeyStartedAt
                   FROM collection_officer.driverorders do
-                  INNER JOIN market_place.processorders po ON do.orderId = po.id
+                  INNER JOIN market_place.processorders po 
+                    ON do.orderId = po.id
                   WHERE do.driverId = ?
                   AND do.orderId IN (?)
                   AND do.drvStatus = 'On the way'
@@ -1013,7 +1022,6 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                         "Error fetching updated orders:",
                         err3.message
                       );
-                      // Still resolve success since the updates worked
                       return resolve({
                         success: true,
                         message: "Journey started successfully",
@@ -1110,8 +1118,11 @@ exports.saveSignatureAndUpdateStatusDAO = async (
 
             // 1. Update driverorders table - set signature and drvStatus
             const updateDriverOrdersQuery = `
-              UPDATE driverorders 
-              SET signature = ?, drvStatus = 'Completed'
+              UPDATE collection_officer.driverorders 
+              SET 
+                signature = ?,
+                drvStatus = 'Completed',
+                completeTime = CURRENT_TIMESTAMP
               WHERE orderId IN (?)
             `;
 
