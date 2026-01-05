@@ -17,10 +17,13 @@ router.get('/get-order-user-details', auth, orderEp.GetOrderUserDetails);
 router.post('/start-journey', auth, orderEp.StartJourney);
 
 // Save Signature 
-router.post('/save-signature', 
-  auth, 
-  upload.single('signature'), 
+router.post('/save-signature',
+  auth,
+  upload.single('signature'),
   orderEp.saveSignature
 );
+
+//re start journey
+router.post('/re-start-journey', auth, orderEp.ReStartJourney);
 
 module.exports = router;

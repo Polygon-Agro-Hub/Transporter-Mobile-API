@@ -36,13 +36,12 @@ const db = require("../startup/database");
 //           END
 //         ) as cashOrders,
 
-//         -- Get process order IDs for ongoing orders (On the way)
+//         -- Get process order IDs for ongoing orders (On the way) - NO DATE FILTER
 //         (
 //           SELECT GROUP_CONCAT(DISTINCT do2.orderId ORDER BY do2.orderId)
 //           FROM collection_officer.driverorders do2
 //           WHERE do2.driverId = ?
 //             AND do2.drvStatus = 'On the way'
-//             AND DATE(do2.createdAt) = CURDATE()
 //             AND do2.isHandOver = 0
 //         ) as ongoingProcessOrderIds
 
@@ -51,7 +50,6 @@ const db = require("../startup/database");
 //       INNER JOIN market_place.orders o ON po.orderId = o.id
 //       WHERE 
 //         do.driverId = ?
-//         AND DATE(do.createdAt) = CURDATE()
 //         AND do.isHandOver = 0
 //       GROUP BY do.driverId;
 //     `;
@@ -84,7 +82,7 @@ const db = require("../startup/database");
 //           .filter((id) => !isNaN(id));
 //       }
 
-//       // NOW: Get unique locations count for pending orders (Todo, Hold, On the way)
+//       // Get unique locations count for ALL pending orders (Todo, Hold, On the way) - NO DATE FILTER
 //       const locationSql = `
 //         SELECT COUNT(DISTINCT locationKey) as uniqueLocationsCount
 //         FROM (
@@ -97,7 +95,6 @@ const db = require("../startup/database");
 //           INNER JOIN market_place.orderhouse oh ON o.id = oh.orderId
 //           WHERE 
 //             do.driverId = ?
-//             AND DATE(do.createdAt) = CURDATE()
 //             AND do.isHandOver = 0
 //             AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
 //             AND o.buildingType = 'House'
@@ -113,7 +110,6 @@ const db = require("../startup/database");
 //           INNER JOIN market_place.orderapartment oa ON o.id = oa.orderId
 //           WHERE 
 //             do.driverId = ?
-//             AND DATE(do.createdAt) = CURDATE()
 //             AND do.isHandOver = 0
 //             AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
 //             AND o.buildingType = 'Apartment'
@@ -143,6 +139,7 @@ const db = require("../startup/database");
 //     });
 //   });
 // };
+
 exports.getAmount = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -162,7 +159,17 @@ exports.getAmount = async (driverId) => {
         ) as totalCashAmount,
 
         COUNT(DISTINCT CASE WHEN do.drvStatus = 'Todo' THEN do.orderId END) as todoOrders,
+        
+        -- ALL completed orders (no date filter)
         COUNT(DISTINCT CASE WHEN do.drvStatus = 'Completed' THEN do.orderId END) as completedOrders,
+        
+        -- TODAY'S completed orders (for progress calculation)
+        COUNT(DISTINCT CASE 
+          WHEN do.drvStatus = 'Completed' 
+               AND DATE(do.completeTime) = CURDATE()
+          THEN do.orderId 
+        END) as todayCompletedOrders,
+        
         COUNT(DISTINCT CASE WHEN do.drvStatus = 'On the way' THEN do.orderId END) as onTheWayOrders,
         COUNT(DISTINCT CASE WHEN do.drvStatus = 'Hold' THEN do.orderId END) as holdOrders,
         COUNT(DISTINCT CASE WHEN do.drvStatus = 'Return' THEN do.orderId END) as returnOrders,
@@ -177,7 +184,7 @@ exports.getAmount = async (driverId) => {
           END
         ) as cashOrders,
 
-        -- Get process order IDs for ongoing orders (On the way) - NO DATE FILTER
+        -- Get process order IDs for ongoing orders (On the way)
         (
           SELECT GROUP_CONCAT(DISTINCT do2.orderId ORDER BY do2.orderId)
           FROM collection_officer.driverorders do2
@@ -206,6 +213,7 @@ exports.getAmount = async (driverId) => {
         totalCashAmount: 0,
         todoOrders: 0,
         completedOrders: 0,
+        todayCompletedOrders: 0,
         onTheWayOrders: 0,
         holdOrders: 0,
         returnOrders: 0,
@@ -223,58 +231,73 @@ exports.getAmount = async (driverId) => {
           .filter((id) => !isNaN(id));
       }
 
-      // Get unique locations count for ALL pending orders (Todo, Hold, On the way) - NO DATE FILTER
-      const locationSql = `
-        SELECT COUNT(DISTINCT locationKey) as uniqueLocationsCount
-        FROM (
-          -- Get House addresses
-          SELECT 
-            CONCAT(oh.houseNo, '-', oh.streetName, '-', oh.city) as locationKey
-          FROM collection_officer.driverorders do
-          INNER JOIN market_place.processorders po ON do.orderId = po.id
-          INNER JOIN market_place.orders o ON po.orderId = o.id
-          INNER JOIN market_place.orderhouse oh ON o.id = oh.orderId
-          WHERE 
-            do.driverId = ?
-            AND do.isHandOver = 0
-            AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
-            AND o.buildingType = 'House'
-          
-          UNION ALL
-          
-          -- Get Apartment addresses
-          SELECT 
-            CONCAT(oa.buildingNo, '-', oa.buildingName, '-', oa.streetName, '-', oa.city) as locationKey
-          FROM collection_officer.driverorders do
-          INNER JOIN market_place.processorders po ON do.orderId = po.id
-          INNER JOIN market_place.orders o ON po.orderId = o.id
-          INNER JOIN market_place.orderapartment oa ON o.id = oa.orderId
-          WHERE 
-            do.driverId = ?
-            AND do.isHandOver = 0
-            AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
-            AND o.buildingType = 'Apartment'
-        ) as allLocations
+      // Get TODAY'S return orders count (Return + Return Received created today)
+      const returnSql = `
+        SELECT COUNT(DISTINCT dro.id) as todayReturnOrders
+        FROM collection_officer.driverreturnorders dro
+        INNER JOIN collection_officer.driverorders do ON dro.drvOrderId = do.id
+        WHERE 
+          do.driverId = ?
+          AND do.isHandOver = 0
+          AND DATE(dro.createdAt) = CURDATE()
+          AND do.drvStatus IN ('Return', 'Return Received')
       `;
 
-      db.collectionofficer.query(locationSql, [driverId, driverId], (locErr, locResults) => {
-        if (locErr) {
-          console.error("Database error fetching unique locations:", locErr.message);
-          // If location query fails, return 0 but don't fail the whole request
+      db.collectionofficer.query(returnSql, [driverId], (retErr, retResults) => {
+        if (retErr) {
+          console.error("Database error fetching return orders:", retErr.message);
+          // Continue without return count if query fails
+          result.todayReturnOrders = 0;
+        } else {
+          result.todayReturnOrders = retResults[0]?.todayReturnOrders || 0;
+        }
+
+        // Get unique locations count for ALL pending orders (Todo, Hold, On the way)
+        const locationSql = `
+          SELECT COUNT(DISTINCT locationKey) as uniqueLocationsCount
+          FROM (
+            -- Get House addresses
+            SELECT 
+              CONCAT(oh.houseNo, '-', oh.streetName, '-', oh.city) as locationKey
+            FROM collection_officer.driverorders do
+            INNER JOIN market_place.processorders po ON do.orderId = po.id
+            INNER JOIN market_place.orders o ON po.orderId = o.id
+            INNER JOIN market_place.orderhouse oh ON o.id = oh.orderId
+            WHERE 
+              do.driverId = ?
+              AND do.isHandOver = 0
+              AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
+              AND o.buildingType = 'House'
+            
+            UNION ALL
+            
+            -- Get Apartment addresses
+            SELECT 
+              CONCAT(oa.buildingNo, '-', oa.buildingName, '-', oa.streetName, '-', oa.city) as locationKey
+            FROM collection_officer.driverorders do
+            INNER JOIN market_place.processorders po ON do.orderId = po.id
+            INNER JOIN market_place.orders o ON po.orderId = o.id
+            INNER JOIN market_place.orderapartment oa ON o.id = oa.orderId
+            WHERE 
+              do.driverId = ?
+              AND do.isHandOver = 0
+              AND do.drvStatus IN ('Todo', 'Hold', 'On the way')
+              AND o.buildingType = 'Apartment'
+          ) as allLocations
+        `;
+
+        db.collectionofficer.query(locationSql, [driverId, driverId], (locErr, locResults) => {
+          if (locErr) {
+            console.error("Database error fetching unique locations:", locErr.message);
+            result.uniqueLocationsCount = 0;
+          } else {
+            result.uniqueLocationsCount = locResults[0]?.uniqueLocationsCount || 0;
+          }
+
           resolve({
             ...result,
             ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
-            uniqueLocationsCount: 0,
           });
-          return;
-        }
-
-        const uniqueLocationsCount = locResults[0]?.uniqueLocationsCount || 0;
-
-        resolve({
-          ...result,
-          ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
-          uniqueLocationsCount: uniqueLocationsCount,
         });
       });
     });

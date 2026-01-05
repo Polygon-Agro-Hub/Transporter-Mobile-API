@@ -445,6 +445,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         do.drvStatus,
         do.isHandOver,
         do.createdAt as driverOrderCreatedAt,
+        do.completeTime,
         po.id as processOrderId,
         po.status as processStatus,
         o.id as orderId,
@@ -522,15 +523,12 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         let addressKey = `${userId}_`;
 
         if (buildingType === "House") {
-          addressKey += `HOUSE_${order.house_houseNo || ""}_${
-            order.house_streetName || ""
-          }_${order.house_city || ""}`;
+          addressKey += `HOUSE_${order.house_houseNo || ""}_${order.house_streetName || ""
+            }_${order.house_city || ""}`;
         } else if (buildingType === "Apartment") {
-          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${
-            order.apartment_buildingName || ""
-          }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${
-            order.apartment_streetName || ""
-          }_${order.apartment_city || ""}`;
+          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${order.apartment_buildingName || ""
+            }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${order.apartment_streetName || ""
+            }_${order.apartment_city || ""}`;
         } else {
           addressKey += `OTHER_${order.orderId}`; // No address or other type
         }
@@ -550,6 +548,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             allProcessOrderIds: [],
             allOrderIds: [],
             allScheduleTimes: [],
+            allCompleteTimes: [], // Track all complete times
             holdReasons: [], // Store hold reasons
             drvStatus: order.drvStatus,
             isHandOver: order.isHandOver,
@@ -570,12 +569,12 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             addressDetails:
               buildingType === "House"
                 ? {
-                    houseNo: order.house_houseNo,
-                    streetName: order.house_streetName,
-                    city: order.house_city,
-                  }
+                  houseNo: order.house_houseNo,
+                  streetName: order.house_streetName,
+                  city: order.house_city,
+                }
                 : buildingType === "Apartment"
-                ? {
+                  ? {
                     buildingNo: order.apartment_buildingNo,
                     buildingName: order.apartment_buildingName,
                     unitNo: order.apartment_unitNo,
@@ -584,7 +583,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
                     streetName: order.apartment_streetName,
                     city: order.apartment_city,
                   }
-                : null,
+                  : null,
           };
         }
 
@@ -596,6 +595,11 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
 
         if (order.sheduleTime) {
           group.allScheduleTimes.push(order.sheduleTime);
+        }
+
+        // Track complete times
+        if (order.completeTime) {
+          group.allCompleteTimes.push(order.completeTime);
         }
 
         // Collect hold reasons if status is Hold and reason exists
@@ -658,13 +662,17 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             ? uniqueScheduleTimes[0]
             : "Not Scheduled";
 
+        // Get the most recent complete time (or first if you prefer)
+        const completeTime = group.allCompleteTimes.length > 0
+          ? group.allCompleteTimes.sort().reverse()[0] // Most recent
+          : null;
+
         // Format address for display
         let formattedAddress = "No Address";
         if (group.buildingType === "House" && group.addressDetails) {
           const addr = group.addressDetails;
-          formattedAddress = `${addr.houseNo || ""}, ${
-            addr.streetName || ""
-          }, ${addr.city || ""}`
+          formattedAddress = `${addr.houseNo || ""}, ${addr.streetName || ""
+            }, ${addr.city || ""}`
             .trim()
             .replace(/^,\s*|\s*,/g, "");
         } else if (group.buildingType === "Apartment" && group.addressDetails) {
@@ -696,6 +704,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
           allProcessOrderIds: group.allProcessOrderIds,
           allScheduleTimes: uniqueScheduleTimes,
           primaryScheduleTime: primaryScheduleTime,
+          completeTime: completeTime, // *** ADDED: Include completeTime in response ***
           sequenceNumber: (index + 1).toString().padStart(2, "0"),
           userId: group.userId,
           title: group.userTitle,
@@ -730,6 +739,9 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         if (b.primaryScheduleTime === "Not Scheduled") return -1;
         return a.primaryScheduleTime.localeCompare(b.primaryScheduleTime);
       });
+
+      console.log("DAO returning orders with completeTime:",
+        formattedResults.filter(o => o.completeTime).length);
 
       resolve(formattedResults);
     });
@@ -1293,3 +1305,73 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
     );
   });
 };
+
+
+//re strat journy
+exports.reStartJourneyDAO = async (driverId, orderIds) => {
+  try {
+    // Step 1: Get driverorders records for the given orderIds and driverId
+    const [driverOrders] = await db.collectionofficer.promise().query(
+      `SELECT id, orderId, drvStatus 
+       FROM driverorders 
+       WHERE driverId = ? AND orderId IN (?)`,
+      [driverId, orderIds]
+    );
+
+    if (driverOrders.length === 0) {
+      return {
+        success: false,
+        message: "No valid orders found for this driver",
+        ongoingProcessOrderIds: []
+      };
+    }
+
+    // Extract driverorder IDs
+    const driverOrderIds = driverOrders.map(order => order.id);
+
+    // Step 2: Check if any orders are already in ongoing process
+    const ongoingOrders = driverOrders.filter(
+      order => order.drvStatus === "On the Way" || order.drvStatus === "Arrived"
+    );
+
+    if (ongoingOrders.length > 0) {
+      return {
+        success: false,
+        message: "Some orders are already in ongoing process",
+        ongoingProcessOrderIds: ongoingOrders.map(order => order.orderId)
+      };
+    }
+
+    // Step 3: Update driverorders table - set drvStatus to "On the Way"
+    await db.collectionofficer.promise().query(
+      `UPDATE driverorders 
+       SET drvStatus = 'On the Way'
+           
+       WHERE id IN (?)`,
+      [driverOrderIds]
+    );
+
+    // Step 4: Update driverholdorders table - set restartedTime to current time
+    await db.collectionofficer.promise().query(
+      `UPDATE driverholdorders 
+       SET restartedTime = NOW() 
+       WHERE drvOrderId IN (?)`,
+      [driverOrderIds]
+    );
+
+    return {
+      success: true,
+      message: `Successfully restarted journey for ${driverOrders.length} order(s)`,
+      updatedOrders: driverOrders.map(order => ({
+        orderId: order.orderId,
+        driverOrderId: order.id,
+        drvStatus: "On the Way"
+      }))
+    };
+
+  } catch (error) {
+    console.error("Error in reStartJourneyDAO:", error);
+    throw error;
+  }
+};
+
