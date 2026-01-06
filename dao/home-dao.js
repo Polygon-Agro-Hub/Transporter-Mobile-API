@@ -166,7 +166,7 @@ exports.getAmount = async (driverId) => {
         -- TODAY'S completed orders (for progress calculation)
         COUNT(DISTINCT CASE 
           WHEN do.drvStatus = 'Completed' 
-               AND DATE(do.completeTime) = CURDATE()
+               AND DATE(po.deliveredTime) = CURDATE()
           THEN do.orderId 
         END) as todayCompletedOrders,
         
@@ -222,7 +222,6 @@ exports.getAmount = async (driverId) => {
         ongoingProcessOrderIds: null,
       };
 
-      // Convert ongoingProcessOrderIds from string to array of integers
       let ongoingProcessOrderIdsArray = [];
       if (result.ongoingProcessOrderIds) {
         ongoingProcessOrderIdsArray = result.ongoingProcessOrderIds
@@ -231,7 +230,6 @@ exports.getAmount = async (driverId) => {
           .filter((id) => !isNaN(id));
       }
 
-      // Get TODAY'S return orders count (Return + Return Received created today)
       const returnSql = `
         SELECT COUNT(DISTINCT dro.id) as todayReturnOrders
         FROM collection_officer.driverreturnorders dro
@@ -246,17 +244,14 @@ exports.getAmount = async (driverId) => {
       db.collectionofficer.query(returnSql, [driverId], (retErr, retResults) => {
         if (retErr) {
           console.error("Database error fetching return orders:", retErr.message);
-          // Continue without return count if query fails
           result.todayReturnOrders = 0;
         } else {
           result.todayReturnOrders = retResults[0]?.todayReturnOrders || 0;
         }
 
-        // Get unique locations count for ALL pending orders (Todo, Hold, On the way)
         const locationSql = `
           SELECT COUNT(DISTINCT locationKey) as uniqueLocationsCount
           FROM (
-            -- Get House addresses
             SELECT 
               CONCAT(oh.houseNo, '-', oh.streetName, '-', oh.city) as locationKey
             FROM collection_officer.driverorders do
@@ -271,7 +266,6 @@ exports.getAmount = async (driverId) => {
             
             UNION ALL
             
-            -- Get Apartment addresses
             SELECT 
               CONCAT(oa.buildingNo, '-', oa.buildingName, '-', oa.streetName, '-', oa.city) as locationKey
             FROM collection_officer.driverorders do
@@ -286,23 +280,32 @@ exports.getAmount = async (driverId) => {
           ) as allLocations
         `;
 
-        db.collectionofficer.query(locationSql, [driverId, driverId], (locErr, locResults) => {
-          if (locErr) {
-            console.error("Database error fetching unique locations:", locErr.message);
-            result.uniqueLocationsCount = 0;
-          } else {
-            result.uniqueLocationsCount = locResults[0]?.uniqueLocationsCount || 0;
-          }
+        db.collectionofficer.query(
+          locationSql,
+          [driverId, driverId],
+          (locErr, locResults) => {
+            if (locErr) {
+              console.error(
+                "Database error fetching unique locations:",
+                locErr.message
+              );
+              result.uniqueLocationsCount = 0;
+            } else {
+              result.uniqueLocationsCount =
+                locResults[0]?.uniqueLocationsCount || 0;
+            }
 
-          resolve({
-            ...result,
-            ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
-          });
-        });
+            resolve({
+              ...result,
+              ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
+            });
+          }
+        );
       });
     });
   });
 };
+
 
 // Get Reveived Cash
 exports.getReceivedCash = async (driverId, paymentMethod = 'Cash') => {
