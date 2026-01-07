@@ -423,3 +423,93 @@ exports.saveSignature = asyncHandler(async (req, res) => {
     });
   }
 });
+
+
+//Re start Journey 
+
+exports.ReStartJourney = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    const response = {
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    };
+    console.log("StartJourney Response:", response);
+    return res.status(401).json(response);
+  }
+
+  const driverId = req.user.id;
+  const { orderIds } = req.body;
+
+  try {
+    // Validate orderIds parameter
+    if (!orderIds) {
+      const response = {
+        status: "error",
+        message: "orderIds parameter is required",
+      };
+      console.log("StartJourney Response:", response);
+      return res.status(400).json(response);
+    }
+
+    // Convert to array
+    let orderIdArray = [];
+    if (typeof orderIds === "string") {
+      orderIdArray = orderIds
+        .split(",")
+        .map((id) => parseInt(id.trim()))
+        .filter((id) => !isNaN(id));
+    } else if (Array.isArray(orderIds)) {
+      orderIdArray = orderIds
+        .map((id) => parseInt(id))
+        .filter((id) => !isNaN(id));
+    }
+
+    if (orderIdArray.length === 0) {
+      const response = {
+        status: "error",
+        message: "Valid order IDs are required",
+      };
+      console.log("StartJourney Response:", response);
+      return res.status(400).json(response);
+    }
+
+    console.log(
+      "Starting journey for driver:",
+      driverId,
+      "with order IDs:",
+      orderIdArray
+    );
+
+    // Start the journey
+    const result = await orderDao.reStartJourneyDAO(driverId, orderIdArray);
+
+    if (result.success) {
+      const response = {
+        status: "success",
+        message: result.message,
+        data: {
+          updatedOrders: result.updatedOrders,
+        },
+      };
+      console.log("StartJourney Response:", response);
+      return res.status(200).json(response);
+    } else {
+      // IMPORTANT: Include ongoingProcessOrderIds in the error response
+      const response = {
+        status: "error",
+        message: result.message,
+        ongoingProcessOrderIds: result.ongoingProcessOrderIds || [],
+      };
+      console.log("StartJourney Response:", response);
+      return res.status(400).json(response);
+    }
+  } catch (error) {
+    console.error("Error starting journey:", error);
+    const response = {
+      status: "error",
+      message: "Failed to start journey",
+    };
+    console.log("StartJourney Response:", response);
+    return res.status(500).json(response);
+  }
+});

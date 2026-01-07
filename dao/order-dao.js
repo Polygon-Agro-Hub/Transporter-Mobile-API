@@ -445,6 +445,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         do.drvStatus,
         do.isHandOver,
         do.createdAt as driverOrderCreatedAt,
+        po.deliveredTime AS deliveredTime,
         po.id as processOrderId,
         po.status as processStatus,
         o.id as orderId,
@@ -513,12 +514,10 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         return reject(new Error("Failed to fetch driver orders"));
       }
 
-      // Group orders by user and address
       const groupedOrders = results.reduce((groups, order) => {
         const userId = order.userId;
         const buildingType = order.buildingType;
 
-        // Create address key based on building type
         let addressKey = `${userId}_`;
 
         if (buildingType === "House") {
@@ -532,17 +531,15 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             order.apartment_streetName || ""
           }_${order.apartment_city || ""}`;
         } else {
-          addressKey += `OTHER_${order.orderId}`; // No address or other type
+          addressKey += `OTHER_${order.orderId}`;
         }
 
-        // Clean the address key (remove undefined/null, trim)
         addressKey = addressKey
           .replace(/undefined/g, "")
           .replace(/null/g, "")
           .replace(/_+/g, "_")
           .replace(/_$/, "");
 
-        // Initialize group if doesn't exist
         if (!groups[addressKey]) {
           groups[addressKey] = {
             driverOrderId: order.driverOrderId,
@@ -550,7 +547,8 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             allProcessOrderIds: [],
             allOrderIds: [],
             allScheduleTimes: [],
-            holdReasons: [], // Store hold reasons
+            allCompleteTimes: [],
+            holdReasons: [],
             drvStatus: order.drvStatus,
             isHandOver: order.isHandOver,
             userId: order.userId,
@@ -566,7 +564,6 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             phonecode1: order.phonecode1,
             phone2: order.phone2,
             phonecode2: order.phonecode2,
-            // Address details
             addressDetails:
               buildingType === "House"
                 ? {
@@ -588,7 +585,6 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
           };
         }
 
-        // Add this order to the group
         const group = groups[addressKey];
         group.allDriverOrderIds.push(order.driverOrderId);
         group.allProcessOrderIds.push(order.processOrderId);
@@ -598,15 +594,18 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
           group.allScheduleTimes.push(order.sheduleTime);
         }
 
-        // Collect hold reasons if status is Hold and reason exists
+        if (order.deliveredTime) {
+          group.allCompleteTimes.push(order.deliveredTime);
+        }
+
         if (order.drvStatus === "Hold" && order.holdReasonId) {
-          const holdReasonExists = group.holdReasons.some(
+          const exists = group.holdReasons.some(
             (hr) =>
               hr.holdReasonId === order.holdReasonId &&
               hr.driverOrderId === order.driverOrderId
           );
 
-          if (!holdReasonExists) {
+          if (!exists) {
             group.holdReasons.push({
               driverOrderId: order.driverOrderId,
               holdReasonId: order.holdReasonId,
@@ -618,7 +617,6 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
           }
         }
 
-        // Update status to most critical (non-completed takes priority)
         const statusPriority = {
           Return: 1,
           Hold: 2,
@@ -627,14 +625,13 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
           Completed: 5,
         };
 
-        const currentPriority = statusPriority[group.drvStatus] || 5;
-        const newPriority = statusPriority[order.drvStatus] || 5;
-
-        if (newPriority < currentPriority) {
+        if (
+          (statusPriority[order.drvStatus] || 5) <
+          (statusPriority[group.drvStatus] || 5)
+        ) {
           group.drvStatus = order.drvStatus;
         }
 
-        // Update isHandOver (if any is handover, mark as handover)
         if (order.isHandOver === 1) {
           group.isHandOver = 1;
         }
@@ -642,90 +639,86 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         return groups;
       }, {});
 
-      // Convert grouped object to array and format
-      const groupedArray = Object.values(groupedOrders);
+      const formattedResults = Object.values(groupedOrders).map(
+        (group, index) => {
+          group.allDriverOrderIds.sort((a, b) => a - b);
+          group.allProcessOrderIds.sort((a, b) => a - b);
+          group.allOrderIds.sort((a, b) => a - b);
 
-      const formattedResults = groupedArray.map((group, index) => {
-        // Sort all IDs
-        group.allDriverOrderIds.sort((a, b) => a - b);
-        group.allProcessOrderIds.sort((a, b) => a - b);
-        group.allOrderIds.sort((a, b) => a - b);
+          const uniqueScheduleTimes = [
+            ...new Set(group.allScheduleTimes),
+          ].sort();
+          const primaryScheduleTime =
+            uniqueScheduleTimes.length > 0
+              ? uniqueScheduleTimes[0]
+              : "Not Scheduled";
 
-        // Get unique sorted schedule times
-        const uniqueScheduleTimes = [...new Set(group.allScheduleTimes)].sort();
-        const primaryScheduleTime =
-          uniqueScheduleTimes.length > 0
-            ? uniqueScheduleTimes[0]
-            : "Not Scheduled";
+          const completeTime =
+            group.allCompleteTimes.length > 0
+              ? group.allCompleteTimes.sort().reverse()[0]
+              : null;
 
-        // Format address for display
-        let formattedAddress = "No Address";
-        if (group.buildingType === "House" && group.addressDetails) {
-          const addr = group.addressDetails;
-          formattedAddress = `${addr.houseNo || ""}, ${
-            addr.streetName || ""
-          }, ${addr.city || ""}`
-            .trim()
-            .replace(/^,\s*|\s*,/g, "");
-        } else if (group.buildingType === "Apartment" && group.addressDetails) {
-          const addr = group.addressDetails;
-          const parts = [];
-          if (addr.buildingNo) parts.push(`Building ${addr.buildingNo}`);
-          if (addr.buildingName) parts.push(addr.buildingName);
-          if (addr.unitNo) parts.push(`Unit ${addr.unitNo}`);
-          if (addr.floorNo) parts.push(`Floor ${addr.floorNo}`);
-          if (addr.houseNo) parts.push(addr.houseNo);
-          if (addr.streetName) parts.push(addr.streetName);
-          if (addr.city) parts.push(addr.city);
-          formattedAddress = parts.join(", ");
+          let formattedAddress = "No Address";
+          if (group.buildingType === "House" && group.addressDetails) {
+            const a = group.addressDetails;
+            formattedAddress = `${a.houseNo || ""}, ${a.streetName || ""}, ${
+              a.city || ""
+            }`
+              .trim()
+              .replace(/^,\s*|\s*,/g, "");
+          } else if (
+            group.buildingType === "Apartment" &&
+            group.addressDetails
+          ) {
+            const a = group.addressDetails;
+            formattedAddress = [
+              a.buildingNo && `Building ${a.buildingNo}`,
+              a.buildingName,
+              a.unitNo && `Unit ${a.unitNo}`,
+              a.floorNo && `Floor ${a.floorNo}`,
+              a.houseNo,
+              a.streetName,
+              a.city,
+            ]
+              .filter(Boolean)
+              .join(", ");
+          }
+
+          return {
+            driverOrderId: group.allDriverOrderIds[0],
+            drvStatus: group.drvStatus,
+            isHandOver: group.isHandOver === 1,
+            fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
+            jobCount: group.allOrderIds.length,
+            allDriverOrderIds: group.allDriverOrderIds,
+            allOrderIds: group.allOrderIds,
+            allProcessOrderIds: group.allProcessOrderIds,
+            allScheduleTimes: uniqueScheduleTimes,
+            primaryScheduleTime,
+            completeTime,
+            sequenceNumber: (index + 1).toString().padStart(2, "0"),
+            userId: group.userId,
+            title: group.userTitle,
+            firstName: group.firstName,
+            lastName: group.lastName,
+            phoneCode: group.phoneCode,
+            phoneNumber: group.phoneNumber,
+            image: group.image,
+            buildingType: group.buildingType,
+            address: formattedAddress,
+            addressDetails: group.addressDetails,
+            phoneNumbers: [group.phone1, group.phone2]
+              .filter(Boolean)
+              .map((phone, idx) => ({
+                phone,
+                code: idx === 0 ? group.phonecode1 : group.phonecode2,
+              })),
+            holdReasons: group.holdReasons.length ? group.holdReasons : null,
+          };
         }
+      );
 
-        // Sort hold reasons by indexNo
-        const sortedHoldReasons = group.holdReasons.sort(
-          (a, b) => (a.indexNo || 0) - (b.indexNo || 0)
-        );
-
-        return {
-          driverOrderId: group.allDriverOrderIds[0], // First driver order ID
-          drvStatus: group.drvStatus,
-          isHandOver: group.isHandOver === 1,
-          fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
-          jobCount: group.allOrderIds.length,
-          allDriverOrderIds: group.allDriverOrderIds,
-          allOrderIds: group.allOrderIds,
-          allProcessOrderIds: group.allProcessOrderIds,
-          allScheduleTimes: uniqueScheduleTimes,
-          primaryScheduleTime: primaryScheduleTime,
-          sequenceNumber: (index + 1).toString().padStart(2, "0"),
-          userId: group.userId,
-          title: group.userTitle,
-          firstName: group.firstName,
-          lastName: group.lastName,
-          phoneCode: group.phoneCode,
-          phoneNumber: group.phoneNumber,
-          image: group.image,
-          // Additional address info
-          buildingType: group.buildingType,
-          address: formattedAddress,
-          addressDetails: group.addressDetails,
-          phoneNumbers: [group.phone1, group.phone2]
-            .filter((phone) => phone)
-            .map((phone, idx) => ({
-              phone: phone,
-              code: idx === 0 ? group.phonecode1 : group.phonecode2,
-            })),
-          // Hold reason information
-          holdReasons: sortedHoldReasons.length > 0 ? sortedHoldReasons : null,
-        };
-      });
-
-      // Sort by primary schedule time
       formattedResults.sort((a, b) => {
-        if (
-          a.primaryScheduleTime === "Not Scheduled" &&
-          b.primaryScheduleTime === "Not Scheduled"
-        )
-          return 0;
         if (a.primaryScheduleTime === "Not Scheduled") return 1;
         if (b.primaryScheduleTime === "Not Scheduled") return -1;
         return a.primaryScheduleTime.localeCompare(b.primaryScheduleTime);
@@ -1059,7 +1052,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
   signaturePath
 ) => {
   return new Promise((resolve, reject) => {
-    // Use the collectionofficer pool to get a connection
     db.collectionofficer.getConnection((err, connection) => {
       if (err) {
         console.error("Error getting database connection:", err);
@@ -1068,7 +1060,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
         );
       }
 
-      // Start transaction
       connection.beginTransaction((beginErr) => {
         if (beginErr) {
           connection.release();
@@ -1077,7 +1068,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
           );
         }
 
-        // First, fetch payment method and orderId for each process order
         const fetchPaymentDetailsQuery = `
           SELECT po.id as processOrderId, po.paymentMethod, po.orderId, o.fullTotal
           FROM market_place.processorders po
@@ -1101,7 +1091,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               });
             }
 
-            // Separate cash and non-cash orders
             const cashOrders = paymentDetails.filter(
               (order) => order.paymentMethod === "Cash"
             );
@@ -1116,17 +1105,15 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               (order) => order.processOrderId
             );
 
-            // 1. Update driverorders table - set signature and drvStatus
+            // 1. Update driverorders (NO completeTime here)
             const updateDriverOrdersQuery = `
               UPDATE collection_officer.driverorders 
               SET 
                 signature = ?,
-                drvStatus = 'Completed',
-                completeTime = CURRENT_TIMESTAMP
+                drvStatus = 'Completed'
               WHERE orderId IN (?)
             `;
 
-            // Execute the first update
             connection.query(
               updateDriverOrdersQuery,
               [signaturePath, processOrderIds],
@@ -1143,13 +1130,14 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   });
                 }
 
-                // 2. Update processorders table - set status to 'Delivered' and handle cash payments
                 let updatePromises = [];
 
-                // Update ALL orders to 'Delivered' status
+                // 2. Update processorders: Delivered + deliveredTime
                 const updateAllOrdersStatusQuery = `
                   UPDATE market_place.processorders 
-                  SET status = 'Delivered'
+                  SET 
+                    status = 'Delivered',
+                    deliveredTime = CURRENT_TIMESTAMP
                   WHERE id IN (?)
                 `;
 
@@ -1160,13 +1148,13 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       [processOrderIds],
                       (err, result) => {
                         if (err) reject(err);
-                        else resolve({ type: "status", result: result });
+                        else resolve({ type: "status", result });
                       }
                     );
                   })
                 );
 
-                // Update cash orders: set isPaid = 1 and amount = fullTotal
+                // 3. Cash orders handling (UNCHANGED)
                 if (cashOrderIds.length > 0) {
                   const updateCashOrdersQuery = `
                     UPDATE market_place.processorders po
@@ -1182,17 +1170,15 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                         [cashOrderIds],
                         (err, result) => {
                           if (err) reject(err);
-                          else resolve({ type: "cash", result: result });
+                          else resolve({ type: "cash", result });
                         }
                       );
                     })
                   );
                 }
 
-                // Execute all update promises
                 Promise.all(updatePromises)
                   .then((results) => {
-                    // Commit transaction
                     connection.commit((commitErr) => {
                       if (commitErr) {
                         return connection.rollback(() => {
@@ -1211,11 +1197,11 @@ exports.saveSignatureAndUpdateStatusDAO = async (
 
                       connection.release();
 
-                      // Parse results
-                      let statusUpdateResult = results.find(
+                      const statusUpdateResult = results.find(
                         (r) => r.type === "status"
                       )?.result;
-                      let cashUpdateResult = results.find(
+
+                      const cashUpdateResult = results.find(
                         (r) => r.type === "cash"
                       )?.result;
 
@@ -1292,4 +1278,72 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
       }
     );
   });
+};
+
+//re strat journy
+exports.reStartJourneyDAO = async (driverId, orderIds) => {
+  try {
+    // Step 1: Get driverorders records for the given orderIds and driverId
+    const [driverOrders] = await db.collectionofficer.promise().query(
+      `SELECT id, orderId, drvStatus 
+       FROM driverorders 
+       WHERE driverId = ? AND orderId IN (?)`,
+      [driverId, orderIds]
+    );
+
+    if (driverOrders.length === 0) {
+      return {
+        success: false,
+        message: "No valid orders found for this driver",
+        ongoingProcessOrderIds: [],
+      };
+    }
+
+    // Extract driverorder IDs
+    const driverOrderIds = driverOrders.map((order) => order.id);
+
+    // Step 2: Check if any orders are already in ongoing process
+    const ongoingOrders = driverOrders.filter(
+      (order) =>
+        order.drvStatus === "On the Way" || order.drvStatus === "Arrived"
+    );
+
+    if (ongoingOrders.length > 0) {
+      return {
+        success: false,
+        message: "Some orders are already in ongoing process",
+        ongoingProcessOrderIds: ongoingOrders.map((order) => order.orderId),
+      };
+    }
+
+    // Step 3: Update driverorders table - set drvStatus to "On the Way"
+    await db.collectionofficer.promise().query(
+      `UPDATE driverorders 
+       SET drvStatus = 'On the Way'
+           
+       WHERE id IN (?)`,
+      [driverOrderIds]
+    );
+
+    // Step 4: Update driverholdorders table - set restartedTime to current time
+    await db.collectionofficer.promise().query(
+      `UPDATE driverholdorders 
+       SET restartedTime = NOW() 
+       WHERE drvOrderId IN (?)`,
+      [driverOrderIds]
+    );
+
+    return {
+      success: true,
+      message: `Successfully restarted journey for ${driverOrders.length} order(s)`,
+      updatedOrders: driverOrders.map((order) => ({
+        orderId: order.orderId,
+        driverOrderId: order.id,
+        drvStatus: "On the Way",
+      })),
+    };
+  } catch (error) {
+    console.error("Error in reStartJourneyDAO:", error);
+    throw error;
+  }
 };
