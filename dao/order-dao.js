@@ -173,15 +173,17 @@ exports.GetDriverEmpId = async (driverId) => {
   });
 };
 
-// Get Driver's Order DAO
+
+
 // exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
 //   return new Promise((resolve, reject) => {
 //     let sql = `
-//       SELECT
+//       SELECT 
 //         do.id as driverOrderId,
 //         do.drvStatus,
 //         do.isHandOver,
 //         do.createdAt as driverOrderCreatedAt,
+//         po.deliveredTime AS deliveredTime,
 //         po.id as processOrderId,
 //         po.status as processStatus,
 //         o.id as orderId,
@@ -197,7 +199,7 @@ exports.GetDriverEmpId = async (driverId) => {
 //         oh.houseNo as house_houseNo,
 //         oh.streetName as house_streetName,
 //         oh.city as house_city,
-//         -- Apartment address details
+//         -- Apartment address details  
 //         oa.buildingNo as apartment_buildingNo,
 //         oa.buildingName as apartment_buildingName,
 //         oa.unitNo as apartment_unitNo,
@@ -205,6 +207,12 @@ exports.GetDriverEmpId = async (driverId) => {
 //         oa.houseNo as apartment_houseNo,
 //         oa.streetName as apartment_streetName,
 //         oa.city as apartment_city,
+//         -- Hold reason details
+//         dho.holdReasonId,
+//         hr.indexNo as holdReasonIndexNo,
+//         hr.rsnEnglish as holdReasonEnglish,
+//         hr.rsnSinhala as holdReasonSinhala,
+//         hr.rsnTamil as holdReasonTamil,
 //         u.title as userTitle,
 //         u.firstName,
 //         u.lastName,
@@ -217,6 +225,8 @@ exports.GetDriverEmpId = async (driverId) => {
 //       INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
 //       LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
 //       LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
+//       LEFT JOIN collection_officer.driverholdorders dho ON do.id = dho.drvOrderId
+//       LEFT JOIN collection_officer.holdreason hr ON dho.holdReasonId = hr.id
 //       WHERE do.driverId = ?
 //         AND do.isHandOver = ?
 //     `;
@@ -242,12 +252,10 @@ exports.GetDriverEmpId = async (driverId) => {
 //         return reject(new Error("Failed to fetch driver orders"));
 //       }
 
-//       // Group orders by user and address
 //       const groupedOrders = results.reduce((groups, order) => {
 //         const userId = order.userId;
 //         const buildingType = order.buildingType;
 
-//         // Create address key based on building type
 //         let addressKey = `${userId}_`;
 
 //         if (buildingType === "House") {
@@ -261,17 +269,15 @@ exports.GetDriverEmpId = async (driverId) => {
 //             order.apartment_streetName || ""
 //           }_${order.apartment_city || ""}`;
 //         } else {
-//           addressKey += `OTHER_${order.orderId}`; // No address or other type
+//           addressKey += `OTHER_${order.orderId}`;
 //         }
 
-//         // Clean the address key (remove undefined/null, trim)
 //         addressKey = addressKey
 //           .replace(/undefined/g, "")
 //           .replace(/null/g, "")
 //           .replace(/_+/g, "_")
 //           .replace(/_$/, "");
 
-//         // Initialize group if doesn't exist
 //         if (!groups[addressKey]) {
 //           groups[addressKey] = {
 //             driverOrderId: order.driverOrderId,
@@ -279,6 +285,8 @@ exports.GetDriverEmpId = async (driverId) => {
 //             allProcessOrderIds: [],
 //             allOrderIds: [],
 //             allScheduleTimes: [],
+//             allCompleteTimes: [],
+//             holdReasons: [],
 //             drvStatus: order.drvStatus,
 //             isHandOver: order.isHandOver,
 //             userId: order.userId,
@@ -294,7 +302,6 @@ exports.GetDriverEmpId = async (driverId) => {
 //             phonecode1: order.phonecode1,
 //             phone2: order.phone2,
 //             phonecode2: order.phonecode2,
-//             // Address details
 //             addressDetails:
 //               buildingType === "House"
 //                 ? {
@@ -316,7 +323,6 @@ exports.GetDriverEmpId = async (driverId) => {
 //           };
 //         }
 
-//         // Add this order to the group
 //         const group = groups[addressKey];
 //         group.allDriverOrderIds.push(order.driverOrderId);
 //         group.allProcessOrderIds.push(order.processOrderId);
@@ -326,7 +332,29 @@ exports.GetDriverEmpId = async (driverId) => {
 //           group.allScheduleTimes.push(order.sheduleTime);
 //         }
 
-//         // Update status to most critical (non-completed takes priority)
+//         if (order.deliveredTime) {
+//           group.allCompleteTimes.push(order.deliveredTime);
+//         }
+
+//         if (order.drvStatus === "Hold" && order.holdReasonId) {
+//           const exists = group.holdReasons.some(
+//             (hr) =>
+//               hr.holdReasonId === order.holdReasonId &&
+//               hr.driverOrderId === order.driverOrderId
+//           );
+
+//           if (!exists) {
+//             group.holdReasons.push({
+//               driverOrderId: order.driverOrderId,
+//               holdReasonId: order.holdReasonId,
+//               indexNo: order.holdReasonIndexNo,
+//               rsnEnglish: order.holdReasonEnglish,
+//               rsnSinhala: order.holdReasonSinhala,
+//               rsnTamil: order.holdReasonTamil,
+//             });
+//           }
+//         }
+
 //         const statusPriority = {
 //           Return: 1,
 //           Hold: 2,
@@ -335,14 +363,13 @@ exports.GetDriverEmpId = async (driverId) => {
 //           Completed: 5,
 //         };
 
-//         const currentPriority = statusPriority[group.drvStatus] || 5;
-//         const newPriority = statusPriority[order.drvStatus] || 5;
-
-//         if (newPriority < currentPriority) {
+//         if (
+//           (statusPriority[order.drvStatus] || 5) <
+//           (statusPriority[group.drvStatus] || 5)
+//         ) {
 //           group.drvStatus = order.drvStatus;
 //         }
 
-//         // Update isHandOver (if any is handover, mark as handover)
 //         if (order.isHandOver === 1) {
 //           group.isHandOver = 1;
 //         }
@@ -350,83 +377,86 @@ exports.GetDriverEmpId = async (driverId) => {
 //         return groups;
 //       }, {});
 
-//       // Convert grouped object to array and format
-//       const groupedArray = Object.values(groupedOrders);
+//       const formattedResults = Object.values(groupedOrders).map(
+//         (group, index) => {
+//           group.allDriverOrderIds.sort((a, b) => a - b);
+//           group.allProcessOrderIds.sort((a, b) => a - b);
+//           group.allOrderIds.sort((a, b) => a - b);
 
-//       const formattedResults = groupedArray.map((group, index) => {
-//         // Sort all IDs
-//         group.allDriverOrderIds.sort((a, b) => a - b);
-//         group.allProcessOrderIds.sort((a, b) => a - b);
-//         group.allOrderIds.sort((a, b) => a - b);
+//           const uniqueScheduleTimes = [
+//             ...new Set(group.allScheduleTimes),
+//           ].sort();
+//           const primaryScheduleTime =
+//             uniqueScheduleTimes.length > 0
+//               ? uniqueScheduleTimes[0]
+//               : "Not Scheduled";
 
-//         // Get unique sorted schedule times
-//         const uniqueScheduleTimes = [...new Set(group.allScheduleTimes)].sort();
-//         const primaryScheduleTime =
-//           uniqueScheduleTimes.length > 0
-//             ? uniqueScheduleTimes[0]
-//             : "Not Scheduled";
+//           const completeTime =
+//             group.allCompleteTimes.length > 0
+//               ? group.allCompleteTimes.sort().reverse()[0]
+//               : null;
 
-//         // Format address for display
-//         let formattedAddress = "No Address";
-//         if (group.buildingType === "House" && group.addressDetails) {
-//           const addr = group.addressDetails;
-//           formattedAddress = `${addr.houseNo || ""}, ${
-//             addr.streetName || ""
-//           }, ${addr.city || ""}`
-//             .trim()
-//             .replace(/^,\s*|\s*,/g, "");
-//         } else if (group.buildingType === "Apartment" && group.addressDetails) {
-//           const addr = group.addressDetails;
-//           const parts = [];
-//           if (addr.buildingNo) parts.push(`Building ${addr.buildingNo}`);
-//           if (addr.buildingName) parts.push(addr.buildingName);
-//           if (addr.unitNo) parts.push(`Unit ${addr.unitNo}`);
-//           if (addr.floorNo) parts.push(`Floor ${addr.floorNo}`);
-//           if (addr.houseNo) parts.push(addr.houseNo);
-//           if (addr.streetName) parts.push(addr.streetName);
-//           if (addr.city) parts.push(addr.city);
-//           formattedAddress = parts.join(", ");
+//           let formattedAddress = "No Address";
+//           if (group.buildingType === "House" && group.addressDetails) {
+//             const a = group.addressDetails;
+//             formattedAddress = `${a.houseNo || ""}, ${a.streetName || ""}, ${
+//               a.city || ""
+//             }`
+//               .trim()
+//               .replace(/^,\s*|\s*,/g, "");
+//           } else if (
+//             group.buildingType === "Apartment" &&
+//             group.addressDetails
+//           ) {
+//             const a = group.addressDetails;
+//             formattedAddress = [
+//               a.buildingNo && `Building ${a.buildingNo}`,
+//               a.buildingName,
+//               a.unitNo && `Unit ${a.unitNo}`,
+//               a.floorNo && `Floor ${a.floorNo}`,
+//               a.houseNo,
+//               a.streetName,
+//               a.city,
+//             ]
+//               .filter(Boolean)
+//               .join(", ");
+//           }
+
+//           return {
+//             driverOrderId: group.allDriverOrderIds[0],
+//             drvStatus: group.drvStatus,
+//             isHandOver: group.isHandOver === 1,
+//             fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
+//             jobCount: group.allOrderIds.length,
+//             allDriverOrderIds: group.allDriverOrderIds,
+//             allOrderIds: group.allOrderIds,
+//             allProcessOrderIds: group.allProcessOrderIds,
+//             allScheduleTimes: uniqueScheduleTimes,
+//             primaryScheduleTime,
+//             completeTime,
+//             sequenceNumber: (index + 1).toString().padStart(2, "0"),
+//             userId: group.userId,
+//             title: group.userTitle,
+//             firstName: group.firstName,
+//             lastName: group.lastName,
+//             phoneCode: group.phoneCode,
+//             phoneNumber: group.phoneNumber,
+//             image: group.image,
+//             buildingType: group.buildingType,
+//             address: formattedAddress,
+//             addressDetails: group.addressDetails,
+//             phoneNumbers: [group.phone1, group.phone2]
+//               .filter(Boolean)
+//               .map((phone, idx) => ({
+//                 phone,
+//                 code: idx === 0 ? group.phonecode1 : group.phonecode2,
+//               })),
+//             holdReasons: group.holdReasons.length ? group.holdReasons : null,
+//           };
 //         }
+//       );
 
-//         return {
-//           driverOrderId: group.allDriverOrderIds[0], // First driver order ID
-//           drvStatus: group.drvStatus,
-//           isHandOver: group.isHandOver === 1,
-//           fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
-//           jobCount: group.allOrderIds.length,
-//           allDriverOrderIds: group.allDriverOrderIds,
-//           allOrderIds: group.allOrderIds,
-//           allProcessOrderIds: group.allProcessOrderIds,
-//           allScheduleTimes: uniqueScheduleTimes,
-//           primaryScheduleTime: primaryScheduleTime,
-//           sequenceNumber: (index + 1).toString().padStart(2, "0"),
-//           userId: group.userId,
-//           title: group.userTitle,
-//           firstName: group.firstName,
-//           lastName: group.lastName,
-//           phoneCode: group.phoneCode,
-//           phoneNumber: group.phoneNumber,
-//           image: group.image,
-//           // Additional address info
-//           buildingType: group.buildingType,
-//           address: formattedAddress,
-//           addressDetails: group.addressDetails,
-//           phoneNumbers: [group.phone1, group.phone2]
-//             .filter((phone) => phone)
-//             .map((phone, idx) => ({
-//               phone: phone,
-//               code: idx === 0 ? group.phonecode1 : group.phonecode2,
-//             })),
-//         };
-//       });
-
-//       // Sort by primary schedule time
 //       formattedResults.sort((a, b) => {
-//         if (
-//           a.primaryScheduleTime === "Not Scheduled" &&
-//           b.primaryScheduleTime === "Not Scheduled"
-//         )
-//           return 0;
 //         if (a.primaryScheduleTime === "Not Scheduled") return 1;
 //         if (b.primaryScheduleTime === "Not Scheduled") return -1;
 //         return a.primaryScheduleTime.localeCompare(b.primaryScheduleTime);
@@ -437,7 +467,8 @@ exports.GetDriverEmpId = async (driverId) => {
 //   });
 // };
 
-exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
+
+exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
   return new Promise((resolve, reject) => {
     let sql = `
       SELECT 
@@ -490,10 +521,15 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
       LEFT JOIN collection_officer.driverholdorders dho ON do.id = dho.drvOrderId
       LEFT JOIN collection_officer.holdreason hr ON dho.holdReasonId = hr.id
       WHERE do.driverId = ?
-        AND do.isHandOver = ?
     `;
 
-    const params = [driverId, isHandOver];
+    const params = [driverId];
+
+    // Only add isHandOver filter if explicitly provided (0 or 1)
+    if (isHandOver !== null && isHandOver !== undefined) {
+      sql += ` AND do.isHandOver = ?`;
+      params.push(isHandOver);
+    }
 
     if (statuses && statuses.length > 0) {
       const validStatuses = statuses.filter((s) =>
@@ -521,15 +557,12 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
         let addressKey = `${userId}_`;
 
         if (buildingType === "House") {
-          addressKey += `HOUSE_${order.house_houseNo || ""}_${
-            order.house_streetName || ""
-          }_${order.house_city || ""}`;
+          addressKey += `HOUSE_${order.house_houseNo || ""}_${order.house_streetName || ""
+            }_${order.house_city || ""}`;
         } else if (buildingType === "Apartment") {
-          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${
-            order.apartment_buildingName || ""
-          }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${
-            order.apartment_streetName || ""
-          }_${order.apartment_city || ""}`;
+          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${order.apartment_buildingName || ""
+            }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${order.apartment_streetName || ""
+            }_${order.apartment_city || ""}`;
         } else {
           addressKey += `OTHER_${order.orderId}`;
         }
@@ -567,12 +600,12 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
             addressDetails:
               buildingType === "House"
                 ? {
-                    houseNo: order.house_houseNo,
-                    streetName: order.house_streetName,
-                    city: order.house_city,
-                  }
+                  houseNo: order.house_houseNo,
+                  streetName: order.house_streetName,
+                  city: order.house_city,
+                }
                 : buildingType === "Apartment"
-                ? {
+                  ? {
                     buildingNo: order.apartment_buildingNo,
                     buildingName: order.apartment_buildingName,
                     unitNo: order.apartment_unitNo,
@@ -581,7 +614,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
                     streetName: order.apartment_streetName,
                     city: order.apartment_city,
                   }
-                : null,
+                  : null,
           };
         }
 
@@ -661,9 +694,8 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
           let formattedAddress = "No Address";
           if (group.buildingType === "House" && group.addressDetails) {
             const a = group.addressDetails;
-            formattedAddress = `${a.houseNo || ""}, ${a.streetName || ""}, ${
-              a.city || ""
-            }`
+            formattedAddress = `${a.houseNo || ""}, ${a.streetName || ""}, ${a.city || ""
+              }`
               .trim()
               .replace(/^,\s*|\s*,/g, "");
           } else if (
