@@ -716,6 +716,37 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
               .join(", ");
           }
 
+          // return {
+          //   driverOrderId: group.allDriverOrderIds[0],
+          //   drvStatus: group.drvStatus,
+          //   isHandOver: group.isHandOver === 1,
+          //   fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
+          //   jobCount: group.allOrderIds.length,
+          //   allDriverOrderIds: group.allDriverOrderIds,
+          //   allOrderIds: group.allOrderIds,
+          //   allProcessOrderIds: group.allProcessOrderIds,
+          //   allScheduleTimes: uniqueScheduleTimes,
+          //   primaryScheduleTime,
+          //   completeTime,
+          //   sequenceNumber: (index + 1).toString().padStart(2, "0"),
+          //   userId: group.userId,
+          //   title: group.userTitle,
+          //   firstName: group.firstName,
+          //   lastName: group.lastName,
+          //   phoneCode: group.phoneCode,
+          //   phoneNumber: group.phoneNumber,
+          //   image: group.image,
+          //   buildingType: group.buildingType,
+          //   address: formattedAddress,
+          //   addressDetails: group.addressDetails,
+          //   phoneNumbers: [group.phone1, group.phone2]
+          //     .filter(Boolean)
+          //     .map((phone, idx) => ({
+          //       phone,
+          //       code: idx === 0 ? group.phonecode1 : group.phonecode2,
+          //     })),
+          //   holdReasons: group.holdReasons.length ? group.holdReasons : null,
+          // };
           return {
             driverOrderId: group.allDriverOrderIds[0],
             drvStatus: group.drvStatus,
@@ -728,6 +759,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
             allScheduleTimes: uniqueScheduleTimes,
             primaryScheduleTime,
             completeTime,
+            allCompleteTimes: group.allCompleteTimes, // ✅ ADD THIS LINE
             sequenceNumber: (index + 1).toString().padStart(2, "0"),
             userId: group.userId,
             title: group.userTitle,
