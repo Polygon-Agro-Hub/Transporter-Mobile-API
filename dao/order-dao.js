@@ -173,12 +173,10 @@ exports.GetDriverEmpId = async (driverId) => {
   });
 };
 
-
-
 // exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = 0) => {
 //   return new Promise((resolve, reject) => {
 //     let sql = `
-//       SELECT 
+//       SELECT
 //         do.id as driverOrderId,
 //         do.drvStatus,
 //         do.isHandOver,
@@ -199,7 +197,7 @@ exports.GetDriverEmpId = async (driverId) => {
 //         oh.houseNo as house_houseNo,
 //         oh.streetName as house_streetName,
 //         oh.city as house_city,
-//         -- Apartment address details  
+//         -- Apartment address details
 //         oa.buildingNo as apartment_buildingNo,
 //         oa.buildingName as apartment_buildingName,
 //         oa.unitNo as apartment_unitNo,
@@ -467,9 +465,17 @@ exports.GetDriverEmpId = async (driverId) => {
 //   });
 // };
 
-
-exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
+exports.getDriverOrdersDAO = async (
+  driverId,
+  statuses,
+  isHandOver = null,
+  filterDate = null
+) => {
   return new Promise((resolve, reject) => {
+    // Get current date for logging
+    const now = new Date();
+    const todayStr = now.toISOString().split("T")[0];
+   
     let sql = `
       SELECT 
         do.id as driverOrderId,
@@ -541,13 +547,40 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
       }
     }
 
+    // IMPORTANT: Add filter for completed orders with specific date's deliveredTime
+    // This ensures we only get completed orders from the specified date
+    if (statuses && statuses.includes("Completed")) {
+      const targetDate = filterDate || todayStr;
+
+      // Modified query logic:
+      // 1. If asking for Completed AND other statuses, include all statuses but filter completed by date
+      // 2. If asking only for Completed, filter by date
+      if (statuses.length === 1 && statuses[0] === "Completed") {
+        // Only fetching completed orders
+        sql += ` AND do.drvStatus = 'Completed' AND DATE(po.deliveredTime) = DATE(?)`;
+        params.push(targetDate);
+        console.log(`Fetching ONLY completed orders for date: ${targetDate}`);
+      } else {
+        // Fetching mixed statuses
+        sql += ` AND (
+          do.drvStatus != 'Completed' 
+          OR (
+            do.drvStatus = 'Completed' 
+            AND DATE(po.deliveredTime) = DATE(?)
+          )
+        )`;
+        params.push(targetDate);
+        console.log(
+          `Fetching mixed statuses, filtering completed by date: ${targetDate}`
+        );
+      }
+    }
+
     sql += ` ORDER BY o.userId, o.sheduleTime ASC, do.createdAt ASC`;
 
     db.collectionofficer.query(sql, params, (err, results) => {
       if (err) {
-        console.error("Database error fetching driver orders:", err.message);
-        console.error("SQL:", sql);
-        return reject(new Error("Failed to fetch driver orders"));
+       return reject(new Error("Failed to fetch driver orders"));
       }
 
       const groupedOrders = results.reduce((groups, order) => {
@@ -557,12 +590,15 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
         let addressKey = `${userId}_`;
 
         if (buildingType === "House") {
-          addressKey += `HOUSE_${order.house_houseNo || ""}_${order.house_streetName || ""
-            }_${order.house_city || ""}`;
+          addressKey += `HOUSE_${order.house_houseNo || ""}_${
+            order.house_streetName || ""
+          }_${order.house_city || ""}`;
         } else if (buildingType === "Apartment") {
-          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${order.apartment_buildingName || ""
-            }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${order.apartment_streetName || ""
-            }_${order.apartment_city || ""}`;
+          addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${
+            order.apartment_buildingName || ""
+          }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${
+            order.apartment_streetName || ""
+          }_${order.apartment_city || ""}`;
         } else {
           addressKey += `OTHER_${order.orderId}`;
         }
@@ -600,12 +636,12 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
             addressDetails:
               buildingType === "House"
                 ? {
-                  houseNo: order.house_houseNo,
-                  streetName: order.house_streetName,
-                  city: order.house_city,
-                }
+                    houseNo: order.house_houseNo,
+                    streetName: order.house_streetName,
+                    city: order.house_city,
+                  }
                 : buildingType === "Apartment"
-                  ? {
+                ? {
                     buildingNo: order.apartment_buildingNo,
                     buildingName: order.apartment_buildingName,
                     unitNo: order.apartment_unitNo,
@@ -614,7 +650,7 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
                     streetName: order.apartment_streetName,
                     city: order.apartment_city,
                   }
-                  : null,
+                : null,
           };
         }
 
@@ -628,7 +664,21 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
         }
 
         if (order.deliveredTime) {
-          group.allCompleteTimes.push(order.deliveredTime);
+          // Convert deliveredTime to ISO string for consistent handling
+          let deliveredTimeStr = order.deliveredTime;
+          if (order.deliveredTime instanceof Date) {
+            deliveredTimeStr = order.deliveredTime.toISOString();
+          } else if (typeof order.deliveredTime === "string") {
+            // If it's MySQL datetime string (2026-01-09 03:27:18), convert to ISO
+            if (
+              order.deliveredTime.includes(" ") &&
+              !order.deliveredTime.includes("T")
+            ) {
+              const date = new Date(order.deliveredTime + "Z"); // Add Z for UTC
+              deliveredTimeStr = date.toISOString();
+            }
+          }
+          group.allCompleteTimes.push(deliveredTimeStr);
         }
 
         if (order.drvStatus === "Hold" && order.holdReasonId) {
@@ -686,16 +736,22 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
               ? uniqueScheduleTimes[0]
               : "Not Scheduled";
 
-          const completeTime =
-            group.allCompleteTimes.length > 0
-              ? group.allCompleteTimes.sort().reverse()[0]
-              : null;
+          // Get the latest completeTime for the group
+          let completeTime = null;
+          if (group.allCompleteTimes.length > 0) {
+            const sortedTimes = group.allCompleteTimes
+              .filter((time) => time) // Remove null/undefined
+              .sort()
+              .reverse();
+            completeTime = sortedTimes.length > 0 ? sortedTimes[0] : null;
+          }
 
           let formattedAddress = "No Address";
           if (group.buildingType === "House" && group.addressDetails) {
             const a = group.addressDetails;
-            formattedAddress = `${a.houseNo || ""}, ${a.streetName || ""}, ${a.city || ""
-              }`
+            formattedAddress = `${a.houseNo || ""}, ${a.streetName || ""}, ${
+              a.city || ""
+            }`
               .trim()
               .replace(/^,\s*|\s*,/g, "");
           } else if (
@@ -716,37 +772,6 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
               .join(", ");
           }
 
-          // return {
-          //   driverOrderId: group.allDriverOrderIds[0],
-          //   drvStatus: group.drvStatus,
-          //   isHandOver: group.isHandOver === 1,
-          //   fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
-          //   jobCount: group.allOrderIds.length,
-          //   allDriverOrderIds: group.allDriverOrderIds,
-          //   allOrderIds: group.allOrderIds,
-          //   allProcessOrderIds: group.allProcessOrderIds,
-          //   allScheduleTimes: uniqueScheduleTimes,
-          //   primaryScheduleTime,
-          //   completeTime,
-          //   sequenceNumber: (index + 1).toString().padStart(2, "0"),
-          //   userId: group.userId,
-          //   title: group.userTitle,
-          //   firstName: group.firstName,
-          //   lastName: group.lastName,
-          //   phoneCode: group.phoneCode,
-          //   phoneNumber: group.phoneNumber,
-          //   image: group.image,
-          //   buildingType: group.buildingType,
-          //   address: formattedAddress,
-          //   addressDetails: group.addressDetails,
-          //   phoneNumbers: [group.phone1, group.phone2]
-          //     .filter(Boolean)
-          //     .map((phone, idx) => ({
-          //       phone,
-          //       code: idx === 0 ? group.phonecode1 : group.phonecode2,
-          //     })),
-          //   holdReasons: group.holdReasons.length ? group.holdReasons : null,
-          // };
           return {
             driverOrderId: group.allDriverOrderIds[0],
             drvStatus: group.drvStatus,
@@ -758,8 +783,8 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
             allProcessOrderIds: group.allProcessOrderIds,
             allScheduleTimes: uniqueScheduleTimes,
             primaryScheduleTime,
-            completeTime,
-            allCompleteTimes: group.allCompleteTimes, // ✅ ADD THIS LINE
+            completeTime: completeTime, // This is now ISO string
+            allCompleteTimes: group.allCompleteTimes, // All as ISO strings
             sequenceNumber: (index + 1).toString().padStart(2, "0"),
             userId: group.userId,
             title: group.userTitle,
@@ -786,6 +811,14 @@ exports.getDriverOrdersDAO = async (driverId, statuses, isHandOver = null) => {
         if (a.primaryScheduleTime === "Not Scheduled") return 1;
         if (b.primaryScheduleTime === "Not Scheduled") return -1;
         return a.primaryScheduleTime.localeCompare(b.primaryScheduleTime);
+      });
+
+    const statusCount = formattedResults.reduce((acc, order) => {
+        acc[order.drvStatus] = (acc[order.drvStatus] || 0) + 1;
+        return acc;
+      }, {});
+      Object.entries(statusCount).forEach(([status, count]) => {
+        console.log(`  ${status}: ${count}`);
       });
 
       resolve(formattedResults);

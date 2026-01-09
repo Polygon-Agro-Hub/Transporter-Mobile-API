@@ -184,12 +184,16 @@ exports.GetDriverOrders = asyncHandler(async (req, res) => {
   }
 
   const driverId = req.user.id;
-  let { status, isHandOver } = req.query;
+  let { status, isHandOver, date } = req.query;
 
   try {
+    // Get current date for logging
+    const now = new Date();
+    const todayStr = now.toISOString().split("T")[0];
+
     // Only filter by isHandOver if explicitly provided (0 or 1)
-    // If not provided (undefined), pass null to get all records
-    const handoverFilter = isHandOver !== undefined ? parseInt(isHandOver) : null;
+    const handoverFilter =
+      isHandOver !== undefined ? parseInt(isHandOver) : null;
 
     let statuses = [];
     if (status) {
@@ -210,13 +214,25 @@ exports.GetDriverOrders = asyncHandler(async (req, res) => {
       });
     }
 
+    // Use provided date or default to today
+    let filterDate = date || todayStr;
+
     const orders = await orderDao.getDriverOrdersDAO(
       driverId,
       statuses,
-      handoverFilter
+      handoverFilter,
+      filterDate
     );
 
-    console.log("FINAL ORDERS RESPONSE:", orders);
+    // Count orders by status
+    const statusCount = orders.reduce((acc, order) => {
+      acc[order.drvStatus] = (acc[order.drvStatus] || 0) + 1;
+      return acc;
+    }, {});
+
+    Object.entries(statusCount).forEach(([status, count]) => {
+      console.log(`  ${status}: ${count}`);
+    });
 
     res.status(200).json({
       status: "success",
@@ -484,8 +500,7 @@ exports.saveSignature = asyncHandler(async (req, res) => {
   }
 });
 
-
-//Re start Journey 
+//Re start Journey
 
 exports.ReStartJourney = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
