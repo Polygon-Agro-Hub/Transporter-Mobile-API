@@ -117,6 +117,64 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
 });
 
 // Get Driver's Order
+// exports.GetDriverOrders = asyncHandler(async (req, res) => {
+//   if (!req.user || !req.user.id) {
+//     return res.status(401).json({
+//       status: "error",
+//       message: "Unauthorized: User authentication required",
+//     });
+//   }
+
+//   const driverId = req.user.id;
+//   let { status, isHandOver } = req.query;
+
+//   try {
+//     //const handoverFilter = isHandOver !== undefined ? parseInt(isHandOver) : 0;
+//     const handoverFilter = isHandOver !== undefined ? parseInt(isHandOver) : null;
+
+//     let statuses = [];
+//     if (status) {
+//       if (typeof status === "string") {
+//         statuses = status.split(",").map((s) => s.trim());
+//       } else if (Array.isArray(status)) {
+//         statuses = status;
+//       }
+
+//       statuses = statuses.map((s) => {
+//         const lower = s.toLowerCase();
+//         if (lower === "todo") return "Todo";
+//         if (lower === "completed") return "Completed";
+//         if (lower === "hold") return "Hold";
+//         if (lower === "return") return "Return";
+//         if (lower === "on the way") return "On the way";
+//         return s;
+//       });
+//     }
+
+//     const orders = await orderDao.getDriverOrdersDAO(
+//       driverId,
+//       statuses,
+//       handoverFilter
+//     );
+
+//     console.log("FINAL ORDERS RESPONSE:", orders);
+
+//     res.status(200).json({
+//       status: "success",
+//       data: {
+//         orders,
+//         totalOrders: orders.length,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Error fetching driver orders:", error);
+//     res.status(500).json({
+//       status: "error",
+//       message: "Failed to fetch orders",
+//     });
+//   }
+// });
+
 exports.GetDriverOrders = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
     return res.status(401).json({
@@ -126,10 +184,16 @@ exports.GetDriverOrders = asyncHandler(async (req, res) => {
   }
 
   const driverId = req.user.id;
-  let { status, isHandOver } = req.query;
+  let { status, isHandOver, date } = req.query;
 
   try {
-    const handoverFilter = isHandOver !== undefined ? parseInt(isHandOver) : 0;
+    // Get current date for logging
+    const now = new Date();
+    const todayStr = now.toISOString().split("T")[0];
+
+    // Only filter by isHandOver if explicitly provided (0 or 1)
+    const handoverFilter =
+      isHandOver !== undefined ? parseInt(isHandOver) : null;
 
     let statuses = [];
     if (status) {
@@ -150,13 +214,25 @@ exports.GetDriverOrders = asyncHandler(async (req, res) => {
       });
     }
 
+    // Use provided date or default to today
+    let filterDate = date || todayStr;
+
     const orders = await orderDao.getDriverOrdersDAO(
       driverId,
       statuses,
-      handoverFilter
+      handoverFilter,
+      filterDate
     );
 
-    console.log("FINAL ORDERS RESPONSE:", orders);
+    // Count orders by status
+    const statusCount = orders.reduce((acc, order) => {
+      acc[order.drvStatus] = (acc[order.drvStatus] || 0) + 1;
+      return acc;
+    }, {});
+
+    Object.entries(statusCount).forEach(([status, count]) => {
+      console.log(`  ${status}: ${count}`);
+    });
 
     res.status(200).json({
       status: "success",
@@ -424,8 +500,7 @@ exports.saveSignature = asyncHandler(async (req, res) => {
   }
 });
 
-
-//Re start Journey 
+//Re start Journey
 
 exports.ReStartJourney = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
