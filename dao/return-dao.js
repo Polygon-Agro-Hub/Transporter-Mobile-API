@@ -164,9 +164,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                         // Step 4: Update driver orders
                         const updateDriverOrdersQuery = `
                           UPDATE collection_officer.driverorders 
-                          SET 
-                            drvStatus = 'Return',
-                            receivedTime = CURRENT_TIMESTAMP
+                          SET drvStatus = 'Return'
                           WHERE id IN (?)
                         `;
 
