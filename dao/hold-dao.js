@@ -26,6 +26,8 @@ exports.getReason = async () => {
 };
 
 
+
+
 // exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
 //     return new Promise((resolve, reject) => {
 //         // Get a connection from the pool
@@ -72,7 +74,7 @@ exports.getReason = async () => {
 //                             invNo: row.invNo,
 //                         }));
 
-//                         // Step 1: Update processorders table status to "Return"
+//                         // Step 1: Update processorders table status to "Hold"
 //                         const updateProcessOrdersQuery = `
 //           UPDATE market_place.processorders 
 //           SET status = 'Hold' 
@@ -119,68 +121,91 @@ exports.getReason = async () => {
 
 //                                 const driverOrderIds = driverOrdersResult.map(row => row.id);
 
-//                                 // Step 3: Update driverorders table drvStatus to "Return"
-//                                 const updateDriverOrdersQuery = `
-//               UPDATE collection_officer.driverorders 
-//               SET drvStatus = 'Hold' 
-//               WHERE id IN (?)
+//                                 // Step 2.5: Check if any driverOrderIds already exist in driverholdorders
+//                                 const checkExistingHoldQuery = `
+//               SELECT drvOrderId 
+//               FROM collection_officer.driverholdorders 
+//               WHERE drvOrderId IN (?)
 //             `;
 
-//                                 connection.query(updateDriverOrdersQuery, [driverOrderIds], (error, updateDriverResult) => {
+//                                 connection.query(checkExistingHoldQuery, [driverOrderIds], (error, existingHolds) => {
 //                                     if (error) {
 //                                         return connection.rollback(() => {
 //                                             connection.release();
-//                                             reject(new Error("Failed to update driver orders status: " + error.message));
+//                                             reject(new Error("Failed to check existing hold orders: " + error.message));
 //                                         });
 //                                     }
 
-//                                     // Step 4: Insert into driverreturnorders table
-//                                     const insertReturnOrdersQuery = `
-//                 INSERT INTO collection_officer.driverholdorders (drvOrderId, holdReasonId) 
-//                 VALUES ?
+//                                     // If any orders already have a hold, rollback
+//                                     if (existingHolds.length > 0) {
+//                                         return connection.rollback(() => {
+//                                             connection.release();
+//                                             reject(new Error("This order is already on hold"));
+//                                         });
+//                                     }
+
+//                                     // Step 3: Update driverorders table drvStatus to "Hold"
+//                                     const updateDriverOrdersQuery = `
+//                 UPDATE collection_officer.driverorders 
+//                 SET drvStatus = 'Hold' 
+//                 WHERE id IN (?)
 //               `;
 
-//                                     const returnOrdersData = driverOrderIds.map(drvOrderId => [
-//                                         drvOrderId,
-//                                         holdReasonId
-
-//                                     ]);
-
-//                                     connection.query(insertReturnOrdersQuery, [returnOrdersData], (error, insertResult) => {
+//                                     connection.query(updateDriverOrdersQuery, [driverOrderIds], (error, updateDriverResult) => {
 //                                         if (error) {
 //                                             return connection.rollback(() => {
 //                                                 connection.release();
-//                                                 reject(new Error("Failed to insert return orders: " + error.message));
+//                                                 reject(new Error("Failed to update driver orders status: " + error.message));
 //                                             });
 //                                         }
 
-//                                         // Commit transaction
-//                                         connection.commit((err) => {
-//                                             if (err) {
+//                                         // Step 4: Insert into driverholdorders table
+//                                         const insertHoldOrdersQuery = `
+//                   INSERT INTO collection_officer.driverholdorders (drvOrderId, holdReasonId) 
+//                   VALUES ?
+//                 `;
+
+//                                         const holdOrdersData = driverOrderIds.map(drvOrderId => [
+//                                             drvOrderId,
+//                                             holdReasonId
+//                                         ]);
+
+//                                         connection.query(insertHoldOrdersQuery, [holdOrdersData], (error, insertResult) => {
+//                                             if (error) {
 //                                                 return connection.rollback(() => {
 //                                                     connection.release();
-//                                                     reject(new Error("Transaction commit failed: " + err.message));
+//                                                     reject(new Error("Failed to insert hold orders: " + error.message));
 //                                                 });
 //                                             }
 
-//                                             // Release connection back to pool
-//                                             connection.release();
+//                                             // Commit transaction
+//                                             connection.commit((err) => {
+//                                                 if (err) {
+//                                                     return connection.rollback(() => {
+//                                                         connection.release();
+//                                                         reject(new Error("Transaction commit failed: " + err.message));
+//                                                     });
+//                                                 }
 
-//                                             resolve({
-//                                                 processOrdersUpdated: processOrdersResult.affectedRows,
-//                                                 driverOrdersUpdated: updateDriverResult.affectedRows,
-//                                                 returnOrdersInserted: insertResult.affectedRows,
-//                                                 driverOrderIds: driverOrderIds,
+//                                                 // Release connection back to pool
+//                                                 connection.release();
 
-//                                                 invoiceNumbers: invoiceNumbers,
-//                                                 orderDetails: orderDetails,
+//                                                 resolve({
+//                                                     processOrdersUpdated: processOrdersResult.affectedRows,
+//                                                     driverOrdersUpdated: updateDriverResult.affectedRows,
+//                                                     holdOrdersInserted: insertResult.affectedRows,
+//                                                     driverOrderIds: driverOrderIds,
+//                                                     invoiceNumbers: invoiceNumbers,
+//                                                     orderDetails: orderDetails,
+//                                                 });
 //                                             });
 //                                         });
 //                                     });
 //                                 });
 //                             });
 //                         });
-//                     });
+//                     }
+//                 );
 //             });
 //         });
 //     });
@@ -235,10 +260,10 @@ exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
 
                         // Step 1: Update processorders table status to "Hold"
                         const updateProcessOrdersQuery = `
-          UPDATE market_place.processorders 
-          SET status = 'Hold' 
-          WHERE id IN (?)
-        `;
+                            UPDATE market_place.processorders 
+                            SET status = 'Hold' 
+                            WHERE id IN (?)
+                        `;
 
                         connection.query(updateProcessOrdersQuery, [orderIds], (error, processOrdersResult) => {
                             if (error) {
@@ -258,10 +283,10 @@ exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
 
                             // Step 2: Get driver order IDs from driverorders table
                             const getDriverOrdersQuery = `
-            SELECT id 
-            FROM collection_officer.driverorders 
-            WHERE orderId IN (?)
-          `;
+                                SELECT id 
+                                FROM collection_officer.driverorders 
+                                WHERE orderId IN (?)
+                            `;
 
                             connection.query(getDriverOrdersQuery, [orderIds], (error, driverOrdersResult) => {
                                 if (error) {
@@ -280,83 +305,59 @@ exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
 
                                 const driverOrderIds = driverOrdersResult.map(row => row.id);
 
-                                // Step 2.5: Check if any driverOrderIds already exist in driverholdorders
-                                const checkExistingHoldQuery = `
-              SELECT drvOrderId 
-              FROM collection_officer.driverholdorders 
-              WHERE drvOrderId IN (?)
-            `;
+                                // Step 3: Update driverorders table drvStatus to "Hold"
+                                const updateDriverOrdersQuery = `
+                                    UPDATE collection_officer.driverorders 
+                                    SET drvStatus = 'Hold' 
+                                    WHERE id IN (?)
+                                `;
 
-                                connection.query(checkExistingHoldQuery, [driverOrderIds], (error, existingHolds) => {
+                                connection.query(updateDriverOrdersQuery, [driverOrderIds], (error, updateDriverResult) => {
                                     if (error) {
                                         return connection.rollback(() => {
                                             connection.release();
-                                            reject(new Error("Failed to check existing hold orders: " + error.message));
+                                            reject(new Error("Failed to update driver orders status: " + error.message));
                                         });
                                     }
 
-                                    // If any orders already have a hold, rollback
-                                    if (existingHolds.length > 0) {
-                                        return connection.rollback(() => {
-                                            connection.release();
-                                            reject(new Error("This order is already on hold"));
-                                        });
-                                    }
+                                    // Step 4: Insert into driverholdorders table (allows multiple holds)
+                                    const insertHoldOrdersQuery = `
+                                        INSERT INTO collection_officer.driverholdorders (drvOrderId, holdReasonId) 
+                                        VALUES ?
+                                    `;
 
-                                    // Step 3: Update driverorders table drvStatus to "Hold"
-                                    const updateDriverOrdersQuery = `
-                UPDATE collection_officer.driverorders 
-                SET drvStatus = 'Hold' 
-                WHERE id IN (?)
-              `;
+                                    const holdOrdersData = driverOrderIds.map(drvOrderId => [
+                                        drvOrderId,
+                                        holdReasonId
+                                    ]);
 
-                                    connection.query(updateDriverOrdersQuery, [driverOrderIds], (error, updateDriverResult) => {
+                                    connection.query(insertHoldOrdersQuery, [holdOrdersData], (error, insertResult) => {
                                         if (error) {
                                             return connection.rollback(() => {
                                                 connection.release();
-                                                reject(new Error("Failed to update driver orders status: " + error.message));
+                                                reject(new Error("Failed to insert hold orders: " + error.message));
                                             });
                                         }
 
-                                        // Step 4: Insert into driverholdorders table
-                                        const insertHoldOrdersQuery = `
-                  INSERT INTO collection_officer.driverholdorders (drvOrderId, holdReasonId) 
-                  VALUES ?
-                `;
-
-                                        const holdOrdersData = driverOrderIds.map(drvOrderId => [
-                                            drvOrderId,
-                                            holdReasonId
-                                        ]);
-
-                                        connection.query(insertHoldOrdersQuery, [holdOrdersData], (error, insertResult) => {
-                                            if (error) {
+                                        // Commit transaction
+                                        connection.commit((err) => {
+                                            if (err) {
                                                 return connection.rollback(() => {
                                                     connection.release();
-                                                    reject(new Error("Failed to insert hold orders: " + error.message));
+                                                    reject(new Error("Transaction commit failed: " + err.message));
                                                 });
                                             }
 
-                                            // Commit transaction
-                                            connection.commit((err) => {
-                                                if (err) {
-                                                    return connection.rollback(() => {
-                                                        connection.release();
-                                                        reject(new Error("Transaction commit failed: " + err.message));
-                                                    });
-                                                }
+                                            // Release connection back to pool
+                                            connection.release();
 
-                                                // Release connection back to pool
-                                                connection.release();
-
-                                                resolve({
-                                                    processOrdersUpdated: processOrdersResult.affectedRows,
-                                                    driverOrdersUpdated: updateDriverResult.affectedRows,
-                                                    holdOrdersInserted: insertResult.affectedRows,
-                                                    driverOrderIds: driverOrderIds,
-                                                    invoiceNumbers: invoiceNumbers,
-                                                    orderDetails: orderDetails,
-                                                });
+                                            resolve({
+                                                processOrdersUpdated: processOrdersResult.affectedRows,
+                                                driverOrdersUpdated: updateDriverResult.affectedRows,
+                                                holdOrdersInserted: insertResult.affectedRows,
+                                                driverOrderIds: driverOrderIds,
+                                                invoiceNumbers: invoiceNumbers,
+                                                orderDetails: orderDetails,
                                             });
                                         });
                                     });
