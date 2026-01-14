@@ -12,10 +12,10 @@ exports.loginUser = async (empId, password) => {
         passwordUpdated,
         firstNameEnglish,
         lastNameEnglish,
-        image
+        image,
+        status  
       FROM collectionofficer
       WHERE empId = ? 
-        AND status = "Approved" 
         AND jobRole = "Driver"
     `;
 
@@ -26,6 +26,12 @@ exports.loginUser = async (empId, password) => {
     }
 
     const user = results[0];
+    
+    // Check if user status is "Approved"
+    if (user.status !== "Approved") {
+      throw new Error("EMP ID not approved");
+    }
+
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
@@ -42,7 +48,8 @@ exports.loginUser = async (empId, password) => {
       image: user.image,
     };
   } catch (err) {
-    throw new Error("Database error: " + err.message);
+    // Pass the specific error message
+    throw new Error(err.message);
   }
 };
 
