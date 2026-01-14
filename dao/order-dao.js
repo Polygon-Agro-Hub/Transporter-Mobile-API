@@ -1407,7 +1407,8 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
   });
 };
 
-//re strat journy
+
+
 // exports.reStartJourneyDAO = async (driverId, orderIds) => {
 //   try {
 //     // Step 1: Get driverorders records for the given orderIds and driverId
@@ -1447,16 +1448,23 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
 //     await db.collectionofficer.promise().query(
 //       `UPDATE driverorders 
 //        SET drvStatus = 'On the Way'
-
 //        WHERE id IN (?)`,
 //       [driverOrderIds]
 //     );
 
-//     // Step 4: Update driverholdorders table - set restartedTime to current time
+//     // Step 4: Update ONLY the latest (last inserted) record in driverholdorders for each drvOrderId
+//     // Using a subquery to get the maximum id (latest record) for each drvOrderId
 //     await db.collectionofficer.promise().query(
 //       `UPDATE driverholdorders 
 //        SET restartedTime = NOW() 
-//        WHERE drvOrderId IN (?)`,
+//        WHERE id IN (
+//          SELECT * FROM (
+//            SELECT MAX(id) 
+//            FROM driverholdorders 
+//            WHERE drvOrderId IN (?)
+//            GROUP BY drvOrderId
+//          ) AS latest_records
+//        )`,
 //       [driverOrderIds]
 //     );
 
@@ -1474,6 +1482,7 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
 //     throw error;
 //   }
 // };
+
 
 exports.reStartJourneyDAO = async (driverId, orderIds) => {
   try {
@@ -1493,8 +1502,9 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
       };
     }
 
-    // Extract driverorder IDs
+    // Extract driverorder IDs and order IDs
     const driverOrderIds = driverOrders.map((order) => order.id);
+    const validOrderIds = driverOrders.map((order) => order.orderId);
 
     // Step 2: Check if any orders are already in ongoing process
     const ongoingOrders = driverOrders.filter(
@@ -1519,7 +1529,6 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
     );
 
     // Step 4: Update ONLY the latest (last inserted) record in driverholdorders for each drvOrderId
-    // Using a subquery to get the maximum id (latest record) for each drvOrderId
     await db.collectionofficer.promise().query(
       `UPDATE driverholdorders 
        SET restartedTime = NOW() 
@@ -1532,6 +1541,15 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
          ) AS latest_records
        )`,
       [driverOrderIds]
+    );
+
+    // Step 5: Update processorders table status to "On the Way"
+    // The orderId in driverorders corresponds to the id in processorders
+    await db.marketPlace.promise().query(
+      `UPDATE processorders 
+       SET status = 'On the Way'
+       WHERE id IN (?)`,
+      [validOrderIds]
     );
 
     return {
