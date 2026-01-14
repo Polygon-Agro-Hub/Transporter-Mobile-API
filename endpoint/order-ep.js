@@ -503,6 +503,8 @@ exports.saveSignature = asyncHandler(async (req, res) => {
 //Re start Journey
 
 exports.ReStartJourney = asyncHandler(async (req, res) => {
+
+  console.log(';;;;;;;;;;;;')
   if (!req.user || !req.user.id) {
     const response = {
       status: "error",
