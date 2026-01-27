@@ -50,7 +50,7 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
           (err, result) => {
             if (err) return rej(err);
             res(result);
-          }
+          },
         );
       });
 
@@ -83,7 +83,7 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
           (err, result) => {
             if (err) return rej(err);
             res(result);
-          }
+          },
         );
       });
 
@@ -173,370 +173,12 @@ exports.GetDriverEmpId = async (driverId) => {
   });
 };
 
-
-
-// exports.getDriverOrdersDAO = async (
-//   driverId,
-//   statuses,
-//   isHandOver = null,
-//   filterDate = null
-// ) => {
-//   return new Promise((resolve, reject) => {
-//     // Get current date for logging
-//     const now = new Date();
-//     const todayStr = now.toISOString().split("T")[0];
-
-//     let sql = `
-//       SELECT 
-//         do.id as driverOrderId,
-//         do.drvStatus,
-//         do.isHandOver,
-//         do.createdAt as driverOrderCreatedAt,
-//         po.deliveredTime AS deliveredTime,
-//         po.id as processOrderId,
-//         po.status as processStatus,
-//         o.id as orderId,
-//         o.userId,
-//         o.sheduleTime,
-//         o.buildingType,
-//         o.fullName,
-//         o.phone1,
-//         o.phonecode1,
-//         o.phone2,
-//         o.phonecode2,
-//         -- House address details
-//         oh.houseNo as house_houseNo,
-//         oh.streetName as house_streetName,
-//         oh.city as house_city,
-//         -- Apartment address details  
-//         oa.buildingNo as apartment_buildingNo,
-//         oa.buildingName as apartment_buildingName,
-//         oa.unitNo as apartment_unitNo,
-//         oa.floorNo as apartment_floorNo,
-//         oa.houseNo as apartment_houseNo,
-//         oa.streetName as apartment_streetName,
-//         oa.city as apartment_city,
-//         -- Hold reason details
-//         dho.holdReasonId,
-//         hr.indexNo as holdReasonIndexNo,
-//         hr.rsnEnglish as holdReasonEnglish,
-//         hr.rsnSinhala as holdReasonSinhala,
-//         hr.rsnTamil as holdReasonTamil,
-//         u.title as userTitle,
-//         u.firstName,
-//         u.lastName,
-//         u.phoneCode,
-//         u.phoneNumber,
-//         u.image
-//       FROM collection_officer.driverorders do
-//       INNER JOIN market_place.processorders po ON do.orderId = po.id
-//       INNER JOIN market_place.orders o ON po.orderId = o.id
-//       INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
-//       LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
-//       LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
-//       LEFT JOIN collection_officer.driverholdorders dho ON do.id = dho.drvOrderId
-//       LEFT JOIN collection_officer.holdreason hr ON dho.holdReasonId = hr.id
-//       WHERE do.driverId = ?
-//     `;
-
-//     const params = [driverId];
-
-//     // Only add isHandOver filter if explicitly provided (0 or 1)
-//     if (isHandOver !== null && isHandOver !== undefined) {
-//       sql += ` AND do.isHandOver = ?`;
-//       params.push(isHandOver);
-//     }
-
-//     if (statuses && statuses.length > 0) {
-//       const validStatuses = statuses.filter((s) =>
-//         ["Todo", "Completed", "Hold", "Return", "On the way"].includes(s)
-//       );
-//       if (validStatuses.length > 0) {
-//         sql += ` AND do.drvStatus IN (?)`;
-//         params.push(validStatuses);
-//       }
-//     }
-
-//     // IMPORTANT: Add filter for completed orders with specific date's deliveredTime
-//     // This ensures we only get completed orders from the specified date
-//     if (statuses && statuses.includes("Completed")) {
-//       const targetDate = filterDate || todayStr;
-
-//       // Modified query logic:
-//       // 1. If asking for Completed AND other statuses, include all statuses but filter completed by date
-//       // 2. If asking only for Completed, filter by date
-//       if (statuses.length === 1 && statuses[0] === "Completed") {
-//         // Only fetching completed orders
-//         sql += ` AND do.drvStatus = 'Completed' AND DATE(po.deliveredTime) = DATE(?)`;
-//         params.push(targetDate);
-//         console.log(`Fetching ONLY completed orders for date: ${targetDate}`);
-//       } else {
-//         // Fetching mixed statuses
-//         sql += ` AND (
-//           do.drvStatus != 'Completed' 
-//           OR (
-//             do.drvStatus = 'Completed' 
-//             AND DATE(po.deliveredTime) = DATE(?)
-//           )
-//         )`;
-//         params.push(targetDate);
-//         console.log(
-//           `Fetching mixed statuses, filtering completed by date: ${targetDate}`
-//         );
-//       }
-//     }
-
-//     sql += ` ORDER BY o.userId, o.sheduleTime ASC, do.createdAt ASC`;
-
-//     db.collectionofficer.query(sql, params, (err, results) => {
-//       if (err) {
-//         return reject(new Error("Failed to fetch driver orders"));
-//       }
-
-//       const groupedOrders = results.reduce((groups, order) => {
-//         const userId = order.userId;
-//         const buildingType = order.buildingType;
-
-//         let addressKey = `${userId}_`;
-
-//         if (buildingType === "House") {
-//           addressKey += `HOUSE_${order.house_houseNo || ""}_${order.house_streetName || ""
-//             }_${order.house_city || ""}`;
-//         } else if (buildingType === "Apartment") {
-//           addressKey += `APARTMENT_${order.apartment_buildingNo || ""}_${order.apartment_buildingName || ""
-//             }_${order.apartment_unitNo || ""}_${order.apartment_floorNo || ""}_${order.apartment_streetName || ""
-//             }_${order.apartment_city || ""}`;
-//         } else {
-//           addressKey += `OTHER_${order.orderId}`;
-//         }
-
-//         addressKey = addressKey
-//           .replace(/undefined/g, "")
-//           .replace(/null/g, "")
-//           .replace(/_+/g, "_")
-//           .replace(/_$/, "");
-
-//         if (!groups[addressKey]) {
-//           groups[addressKey] = {
-//             driverOrderId: order.driverOrderId,
-//             allDriverOrderIds: [],
-//             allProcessOrderIds: [],
-//             allOrderIds: [],
-//             allScheduleTimes: [],
-//             allCompleteTimes: [],
-//             holdReasons: [],
-//             drvStatus: order.drvStatus,
-//             isHandOver: order.isHandOver,
-//             userId: order.userId,
-//             userTitle: order.userTitle,
-//             firstName: order.firstName,
-//             lastName: order.lastName,
-//             phoneCode: order.phoneCode,
-//             phoneNumber: order.phoneNumber,
-//             image: order.image,
-//             buildingType: order.buildingType,
-//             fullName: order.fullName,
-//             phone1: order.phone1,
-//             phonecode1: order.phonecode1,
-//             phone2: order.phone2,
-//             phonecode2: order.phonecode2,
-//             addressDetails:
-//               buildingType === "House"
-//                 ? {
-//                   houseNo: order.house_houseNo,
-//                   streetName: order.house_streetName,
-//                   city: order.house_city,
-//                 }
-//                 : buildingType === "Apartment"
-//                   ? {
-//                     buildingNo: order.apartment_buildingNo,
-//                     buildingName: order.apartment_buildingName,
-//                     unitNo: order.apartment_unitNo,
-//                     floorNo: order.apartment_floorNo,
-//                     houseNo: order.apartment_houseNo,
-//                     streetName: order.apartment_streetName,
-//                     city: order.apartment_city,
-//                   }
-//                   : null,
-//           };
-//         }
-
-//         const group = groups[addressKey];
-//         group.allDriverOrderIds.push(order.driverOrderId);
-//         group.allProcessOrderIds.push(order.processOrderId);
-//         group.allOrderIds.push(order.orderId);
-
-//         if (order.sheduleTime) {
-//           group.allScheduleTimes.push(order.sheduleTime);
-//         }
-
-//         if (order.deliveredTime) {
-//           // Convert deliveredTime to ISO string for consistent handling
-//           let deliveredTimeStr = order.deliveredTime;
-//           if (order.deliveredTime instanceof Date) {
-//             deliveredTimeStr = order.deliveredTime.toISOString();
-//           } else if (typeof order.deliveredTime === "string") {
-//             // If it's MySQL datetime string (2026-01-09 03:27:18), convert to ISO
-//             if (
-//               order.deliveredTime.includes(" ") &&
-//               !order.deliveredTime.includes("T")
-//             ) {
-//               const date = new Date(order.deliveredTime + "Z"); // Add Z for UTC
-//               deliveredTimeStr = date.toISOString();
-//             }
-//           }
-//           group.allCompleteTimes.push(deliveredTimeStr);
-//         }
-
-//         if (order.drvStatus === "Hold" && order.holdReasonId) {
-//           const exists = group.holdReasons.some(
-//             (hr) =>
-//               hr.holdReasonId === order.holdReasonId &&
-//               hr.driverOrderId === order.driverOrderId
-//           );
-
-//           if (!exists) {
-//             group.holdReasons.push({
-//               driverOrderId: order.driverOrderId,
-//               holdReasonId: order.holdReasonId,
-//               indexNo: order.holdReasonIndexNo,
-//               rsnEnglish: order.holdReasonEnglish,
-//               rsnSinhala: order.holdReasonSinhala,
-//               rsnTamil: order.holdReasonTamil,
-//             });
-//           }
-//         }
-
-//         const statusPriority = {
-//           Return: 1,
-//           Hold: 2,
-//           "On the way": 3,
-//           Todo: 4,
-//           Completed: 5,
-//         };
-
-//         if (
-//           (statusPriority[order.drvStatus] || 5) <
-//           (statusPriority[group.drvStatus] || 5)
-//         ) {
-//           group.drvStatus = order.drvStatus;
-//         }
-
-//         if (order.isHandOver === 1) {
-//           group.isHandOver = 1;
-//         }
-
-//         return groups;
-//       }, {});
-
-//       const formattedResults = Object.values(groupedOrders).map(
-//         (group, index) => {
-//           group.allDriverOrderIds.sort((a, b) => a - b);
-//           group.allProcessOrderIds.sort((a, b) => a - b);
-//           group.allOrderIds.sort((a, b) => a - b);
-
-//           const uniqueScheduleTimes = [
-//             ...new Set(group.allScheduleTimes),
-//           ].sort();
-//           const primaryScheduleTime =
-//             uniqueScheduleTimes.length > 0
-//               ? uniqueScheduleTimes[0]
-//               : "Not Scheduled";
-
-//           // Get the latest completeTime for the group
-//           let completeTime = null;
-//           if (group.allCompleteTimes.length > 0) {
-//             const sortedTimes = group.allCompleteTimes
-//               .filter((time) => time) // Remove null/undefined
-//               .sort()
-//               .reverse();
-//             completeTime = sortedTimes.length > 0 ? sortedTimes[0] : null;
-//           }
-
-//           let formattedAddress = "No Address";
-//           if (group.buildingType === "House" && group.addressDetails) {
-//             const a = group.addressDetails;
-//             formattedAddress = `${a.houseNo || ""}, ${a.streetName || ""}, ${a.city || ""
-//               }`
-//               .trim()
-//               .replace(/^,\s*|\s*,/g, "");
-//           } else if (
-//             group.buildingType === "Apartment" &&
-//             group.addressDetails
-//           ) {
-//             const a = group.addressDetails;
-//             formattedAddress = [
-//               a.buildingNo && `Building ${a.buildingNo}`,
-//               a.buildingName,
-//               a.unitNo && `Unit ${a.unitNo}`,
-//               a.floorNo && `Floor ${a.floorNo}`,
-//               a.houseNo,
-//               a.streetName,
-//               a.city,
-//             ]
-//               .filter(Boolean)
-//               .join(", ");
-//           }
-
-//           return {
-//             driverOrderId: group.allDriverOrderIds[0],
-//             drvStatus: group.drvStatus,
-//             isHandOver: group.isHandOver === 1,
-//             fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
-//             jobCount: group.allOrderIds.length,
-//             allDriverOrderIds: group.allDriverOrderIds,
-//             allOrderIds: group.allOrderIds,
-//             allProcessOrderIds: group.allProcessOrderIds,
-//             allScheduleTimes: uniqueScheduleTimes,
-//             primaryScheduleTime,
-//             completeTime: completeTime, // This is now ISO string
-//             allCompleteTimes: group.allCompleteTimes, // All as ISO strings
-//             sequenceNumber: (index + 1).toString().padStart(2, "0"),
-//             userId: group.userId,
-//             title: group.userTitle,
-//             firstName: group.firstName,
-//             lastName: group.lastName,
-//             phoneCode: group.phoneCode,
-//             phoneNumber: group.phoneNumber,
-//             image: group.image,
-//             buildingType: group.buildingType,
-//             address: formattedAddress,
-//             addressDetails: group.addressDetails,
-//             phoneNumbers: [group.phone1, group.phone2]
-//               .filter(Boolean)
-//               .map((phone, idx) => ({
-//                 phone,
-//                 code: idx === 0 ? group.phonecode1 : group.phonecode2,
-//               })),
-//             holdReasons: group.holdReasons.length ? group.holdReasons : null,
-//           };
-//         }
-//       );
-
-//       formattedResults.sort((a, b) => {
-//         if (a.primaryScheduleTime === "Not Scheduled") return 1;
-//         if (b.primaryScheduleTime === "Not Scheduled") return -1;
-//         return a.primaryScheduleTime.localeCompare(b.primaryScheduleTime);
-//       });
-
-//       const statusCount = formattedResults.reduce((acc, order) => {
-//         acc[order.drvStatus] = (acc[order.drvStatus] || 0) + 1;
-//         return acc;
-//       }, {});
-//       Object.entries(statusCount).forEach(([status, count]) => {
-//         console.log(`  ${status}: ${count}`);
-//       });
-
-//       resolve(formattedResults);
-//     });
-//   });
-// };
-
+// Get Driver Orders DAO
 exports.getDriverOrdersDAO = async (
   driverId,
   statuses,
   isHandOver = null,
-  filterDate = null
+  filterDate = null,
 ) => {
   return new Promise((resolve, reject) => {
     const now = new Date();
@@ -611,7 +253,7 @@ exports.getDriverOrdersDAO = async (
 
     if (statuses && statuses.length > 0) {
       const validStatuses = statuses.filter((s) =>
-        ["Todo", "Completed", "Hold", "Return", "On the way"].includes(s)
+        ["Todo", "Completed", "Hold", "Return", "On the way"].includes(s),
       );
       if (validStatuses.length > 0) {
         sql += ` AND do.drvStatus IN (?)`;
@@ -636,7 +278,7 @@ exports.getDriverOrdersDAO = async (
         )`;
         params.push(targetDate);
         console.log(
-          `Fetching mixed statuses, filtering completed by date: ${targetDate}`
+          `Fetching mixed statuses, filtering completed by date: ${targetDate}`,
         );
       }
     }
@@ -695,20 +337,20 @@ exports.getDriverOrdersDAO = async (
             addressDetails:
               buildingType === "House"
                 ? {
-                  houseNo: order.house_houseNo,
-                  streetName: order.house_streetName,
-                  city: order.house_city,
-                }
+                    houseNo: order.house_houseNo,
+                    streetName: order.house_streetName,
+                    city: order.house_city,
+                  }
                 : buildingType === "Apartment"
                   ? {
-                    buildingNo: order.apartment_buildingNo,
-                    buildingName: order.apartment_buildingName,
-                    unitNo: order.apartment_unitNo,
-                    floorNo: order.apartment_floorNo,
-                    houseNo: order.apartment_houseNo,
-                    streetName: order.apartment_streetName,
-                    city: order.apartment_city,
-                  }
+                      buildingNo: order.apartment_buildingNo,
+                      buildingName: order.apartment_buildingName,
+                      unitNo: order.apartment_unitNo,
+                      floorNo: order.apartment_floorNo,
+                      houseNo: order.apartment_houseNo,
+                      streetName: order.apartment_streetName,
+                      city: order.apartment_city,
+                    }
                   : null,
           };
         }
@@ -727,7 +369,10 @@ exports.getDriverOrdersDAO = async (
           if (order.deliveredTime instanceof Date) {
             deliveredTimeStr = order.deliveredTime.toISOString();
           } else if (typeof order.deliveredTime === "string") {
-            if (order.deliveredTime.includes(" ") && !order.deliveredTime.includes("T")) {
+            if (
+              order.deliveredTime.includes(" ") &&
+              !order.deliveredTime.includes("T")
+            ) {
               const date = new Date(order.deliveredTime + "Z");
               deliveredTimeStr = date.toISOString();
             }
@@ -738,7 +383,9 @@ exports.getDriverOrdersDAO = async (
         // Only add hold reason if it exists and hasn't been added yet
         if (order.drvStatus === "Hold" && order.holdReasonId) {
           const exists = group.holdReasons.some(
-            (hr) => hr.holdReasonId === order.holdReasonId && hr.driverOrderId === order.driverOrderId
+            (hr) =>
+              hr.holdReasonId === order.holdReasonId &&
+              hr.driverOrderId === order.driverOrderId,
           );
 
           if (!exists) {
@@ -761,7 +408,10 @@ exports.getDriverOrdersDAO = async (
           Completed: 5,
         };
 
-        if ((statusPriority[order.drvStatus] || 5) < (statusPriority[group.drvStatus] || 5)) {
+        if (
+          (statusPriority[order.drvStatus] || 5) <
+          (statusPriority[group.drvStatus] || 5)
+        ) {
           group.drvStatus = order.drvStatus;
         }
 
@@ -772,70 +422,88 @@ exports.getDriverOrdersDAO = async (
         return groups;
       }, {});
 
-      const formattedResults = Object.values(groupedOrders).map((group, index) => {
-        group.allDriverOrderIds.sort((a, b) => a - b);
-        group.allProcessOrderIds.sort((a, b) => a - b);
-        group.allOrderIds.sort((a, b) => a - b);
+      const formattedResults = Object.values(groupedOrders).map(
+        (group, index) => {
+          group.allDriverOrderIds.sort((a, b) => a - b);
+          group.allProcessOrderIds.sort((a, b) => a - b);
+          group.allOrderIds.sort((a, b) => a - b);
 
-        const uniqueScheduleTimes = [...new Set(group.allScheduleTimes)].sort();
-        const primaryScheduleTime = uniqueScheduleTimes.length > 0 ? uniqueScheduleTimes[0] : "Not Scheduled";
+          const uniqueScheduleTimes = [
+            ...new Set(group.allScheduleTimes),
+          ].sort();
+          const primaryScheduleTime =
+            uniqueScheduleTimes.length > 0
+              ? uniqueScheduleTimes[0]
+              : "Not Scheduled";
 
-        let completeTime = null;
-        if (group.allCompleteTimes.length > 0) {
-          const sortedTimes = group.allCompleteTimes.filter((time) => time).sort().reverse();
-          completeTime = sortedTimes.length > 0 ? sortedTimes[0] : null;
-        }
+          let completeTime = null;
+          if (group.allCompleteTimes.length > 0) {
+            const sortedTimes = group.allCompleteTimes
+              .filter((time) => time)
+              .sort()
+              .reverse();
+            completeTime = sortedTimes.length > 0 ? sortedTimes[0] : null;
+          }
 
-        let formattedAddress = "No Address";
-        if (group.buildingType === "House" && group.addressDetails) {
-          const a = group.addressDetails;
-          formattedAddress = `${a.houseNo || ""}, ${a.streetName || ""}, ${a.city || ""}`.trim().replace(/^,\s*|\s*,/g, "");
-        } else if (group.buildingType === "Apartment" && group.addressDetails) {
-          const a = group.addressDetails;
-          formattedAddress = [
-            a.buildingNo && `Building ${a.buildingNo}`,
-            a.buildingName,
-            a.unitNo && `Unit ${a.unitNo}`,
-            a.floorNo && `Floor ${a.floorNo}`,
-            a.houseNo,
-            a.streetName,
-            a.city,
-          ].filter(Boolean).join(", ");
-        }
+          let formattedAddress = "No Address";
+          if (group.buildingType === "House" && group.addressDetails) {
+            const a = group.addressDetails;
+            formattedAddress =
+              `${a.houseNo || ""}, ${a.streetName || ""}, ${a.city || ""}`
+                .trim()
+                .replace(/^,\s*|\s*,/g, "");
+          } else if (
+            group.buildingType === "Apartment" &&
+            group.addressDetails
+          ) {
+            const a = group.addressDetails;
+            formattedAddress = [
+              a.buildingNo && `Building ${a.buildingNo}`,
+              a.buildingName,
+              a.unitNo && `Unit ${a.unitNo}`,
+              a.floorNo && `Floor ${a.floorNo}`,
+              a.houseNo,
+              a.streetName,
+              a.city,
+            ]
+              .filter(Boolean)
+              .join(", ");
+          }
 
-        return {
-          driverOrderId: group.allDriverOrderIds[0],
-          drvStatus: group.drvStatus,
-          isHandOver: group.isHandOver === 1,
-          fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
-          jobCount: group.allOrderIds.length,
-          allDriverOrderIds: group.allDriverOrderIds,
-          allOrderIds: group.allOrderIds,
-          allProcessOrderIds: group.allProcessOrderIds,
-          allScheduleTimes: uniqueScheduleTimes,
-          primaryScheduleTime,
-          completeTime: completeTime,
-          allCompleteTimes: group.allCompleteTimes,
-          sequenceNumber: (index + 1).toString().padStart(2, "0"),
-          userId: group.userId,
-          title: group.userTitle,
-          firstName: group.firstName,
-          lastName: group.lastName,
-          phoneCode: group.phoneCode,
-          phoneNumber: group.phoneNumber,
-          image: group.image,
-          buildingType: group.buildingType,
-          address: formattedAddress,
-          addressDetails: group.addressDetails,
-          phoneNumbers: [group.phone1, group.phone2]
-            .filter(Boolean)
-            .map((phone, idx) => ({
-              phone,
-              code: idx === 0 ? group.phonecode1 : group.phonecode2,
-            })),
-          holdReasons: group.holdReasons.length ? group.holdReasons : null,
-        };
-      });
+          return {
+            driverOrderId: group.allDriverOrderIds[0],
+            drvStatus: group.drvStatus,
+            isHandOver: group.isHandOver === 1,
+            fullName: `${group.firstName || ""} ${group.lastName || ""}`.trim(),
+            jobCount: group.allOrderIds.length,
+            allDriverOrderIds: group.allDriverOrderIds,
+            allOrderIds: group.allOrderIds,
+            allProcessOrderIds: group.allProcessOrderIds,
+            allScheduleTimes: uniqueScheduleTimes,
+            primaryScheduleTime,
+            completeTime: completeTime,
+            allCompleteTimes: group.allCompleteTimes,
+            sequenceNumber: (index + 1).toString().padStart(2, "0"),
+            userId: group.userId,
+            title: group.userTitle,
+            firstName: group.firstName,
+            lastName: group.lastName,
+            phoneCode: group.phoneCode,
+            phoneNumber: group.phoneNumber,
+            image: group.image,
+            buildingType: group.buildingType,
+            address: formattedAddress,
+            addressDetails: group.addressDetails,
+            phoneNumbers: [group.phone1, group.phone2]
+              .filter(Boolean)
+              .map((phone, idx) => ({
+                phone,
+                code: idx === 0 ? group.phonecode1 : group.phonecode2,
+              })),
+            holdReasons: group.holdReasons.length ? group.holdReasons : null,
+          };
+        },
+      );
 
       formattedResults.sort((a, b) => {
         if (a.primaryScheduleTime === "Not Scheduled") return 1;
@@ -921,7 +589,7 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
       if (err) {
         console.error(
           "Database error fetching order user details:",
-          err.message
+          err.message,
         );
         return reject(new Error("Failed to fetch order user details"));
       }
@@ -1046,7 +714,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
         if (checkErr) {
           console.error(
             "Database error checking ongoing orders:",
-            checkErr.message
+            checkErr.message,
           );
           return reject(new Error("Failed to check ongoing orders"));
         }
@@ -1140,7 +808,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                     if (err3) {
                       console.error(
                         "Error fetching updated orders:",
-                        err3.message
+                        err3.message,
                       );
                       return resolve({
                         success: true,
@@ -1162,13 +830,13 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                         journeyStartedAt: row.journeyStartedAt,
                       })),
                     });
-                  }
+                  },
                 );
-              }
+              },
             );
-          }
+          },
         );
-      }
+      },
     );
   });
 };
@@ -1176,14 +844,14 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
 // Save Signature DAO
 exports.saveSignatureAndUpdateStatusDAO = async (
   processOrderIds,
-  signaturePath
+  signaturePath,
 ) => {
   return new Promise((resolve, reject) => {
     db.collectionofficer.getConnection((err, connection) => {
       if (err) {
         console.error("Error getting database connection:", err);
         return reject(
-          new Error(`Failed to get database connection: ${err.message}`)
+          new Error(`Failed to get database connection: ${err.message}`),
         );
       }
 
@@ -1191,7 +859,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
         if (beginErr) {
           connection.release();
           return reject(
-            new Error(`Failed to begin transaction: ${beginErr.message}`)
+            new Error(`Failed to begin transaction: ${beginErr.message}`),
           );
         }
 
@@ -1212,24 +880,24 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 console.error("Error fetching payment details:", fetchErr);
                 reject(
                   new Error(
-                    `Failed to fetch payment details: ${fetchErr.message}`
-                  )
+                    `Failed to fetch payment details: ${fetchErr.message}`,
+                  ),
                 );
               });
             }
 
             const cashOrders = paymentDetails.filter(
-              (order) => order.paymentMethod === "Cash"
+              (order) => order.paymentMethod === "Cash",
             );
             const nonCashOrders = paymentDetails.filter(
-              (order) => order.paymentMethod !== "Cash"
+              (order) => order.paymentMethod !== "Cash",
             );
 
             const cashOrderIds = cashOrders.map(
-              (order) => order.processOrderId
+              (order) => order.processOrderId,
             );
             const nonCashOrderIds = nonCashOrders.map(
-              (order) => order.processOrderId
+              (order) => order.processOrderId,
             );
 
             // 1. Update driverorders (NO completeTime here)
@@ -1251,8 +919,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     console.error("Error updating driverorders:", queryErr1);
                     reject(
                       new Error(
-                        `Failed to update driverorders: ${queryErr1.message}`
-                      )
+                        `Failed to update driverorders: ${queryErr1.message}`,
+                      ),
                     );
                   });
                 }
@@ -1276,9 +944,9 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       (err, result) => {
                         if (err) reject(err);
                         else resolve({ type: "status", result });
-                      }
+                      },
                     );
-                  })
+                  }),
                 );
 
                 // 3. Cash orders handling (UNCHANGED)
@@ -1298,9 +966,9 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                         (err, result) => {
                           if (err) reject(err);
                           else resolve({ type: "cash", result });
-                        }
+                        },
                       );
-                    })
+                    }),
                   );
                 }
 
@@ -1312,12 +980,12 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                           connection.release();
                           console.error(
                             "Error committing transaction:",
-                            commitErr
+                            commitErr,
                           );
                           reject(
                             new Error(
-                              `Failed to commit transaction: ${commitErr.message}`
-                            )
+                              `Failed to commit transaction: ${commitErr.message}`,
+                            ),
                           );
                         });
                       }
@@ -1325,11 +993,11 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       connection.release();
 
                       const statusUpdateResult = results.find(
-                        (r) => r.type === "status"
+                        (r) => r.type === "status",
                       )?.result;
 
                       const cashUpdateResult = results.find(
-                        (r) => r.type === "cash"
+                        (r) => r.type === "cash",
                       )?.result;
 
                       console.log("Signature update successful:", {
@@ -1360,14 +1028,14 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       console.error("Error in update promises:", promiseErr);
                       reject(
                         new Error(
-                          `Failed to update process orders: ${promiseErr.message}`
-                        )
+                          `Failed to update process orders: ${promiseErr.message}`,
+                        ),
                       );
                     });
                   });
-              }
+              },
             );
-          }
+          },
         );
       });
     });
@@ -1402,88 +1070,12 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
           accessibleCount: accessibleCount,
           totalRequested: totalRequested,
         });
-      }
+      },
     );
   });
 };
 
-
-
-// exports.reStartJourneyDAO = async (driverId, orderIds) => {
-//   try {
-//     // Step 1: Get driverorders records for the given orderIds and driverId
-//     const [driverOrders] = await db.collectionofficer.promise().query(
-//       `SELECT id, orderId, drvStatus 
-//        FROM driverorders 
-//        WHERE driverId = ? AND orderId IN (?)`,
-//       [driverId, orderIds]
-//     );
-
-//     if (driverOrders.length === 0) {
-//       return {
-//         success: false,
-//         message: "No valid orders found for this driver",
-//         ongoingProcessOrderIds: [],
-//       };
-//     }
-
-//     // Extract driverorder IDs
-//     const driverOrderIds = driverOrders.map((order) => order.id);
-
-//     // Step 2: Check if any orders are already in ongoing process
-//     const ongoingOrders = driverOrders.filter(
-//       (order) =>
-//         order.drvStatus === "On the Way" || order.drvStatus === "Arrived"
-//     );
-
-//     if (ongoingOrders.length > 0) {
-//       return {
-//         success: false,
-//         message: "Some orders are already in ongoing process",
-//         ongoingProcessOrderIds: ongoingOrders.map((order) => order.orderId),
-//       };
-//     }
-
-//     // Step 3: Update driverorders table - set drvStatus to "On the Way"
-//     await db.collectionofficer.promise().query(
-//       `UPDATE driverorders 
-//        SET drvStatus = 'On the Way'
-//        WHERE id IN (?)`,
-//       [driverOrderIds]
-//     );
-
-//     // Step 4: Update ONLY the latest (last inserted) record in driverholdorders for each drvOrderId
-//     // Using a subquery to get the maximum id (latest record) for each drvOrderId
-//     await db.collectionofficer.promise().query(
-//       `UPDATE driverholdorders 
-//        SET restartedTime = NOW() 
-//        WHERE id IN (
-//          SELECT * FROM (
-//            SELECT MAX(id) 
-//            FROM driverholdorders 
-//            WHERE drvOrderId IN (?)
-//            GROUP BY drvOrderId
-//          ) AS latest_records
-//        )`,
-//       [driverOrderIds]
-//     );
-
-//     return {
-//       success: true,
-//       message: `Successfully restarted journey for ${driverOrders.length} order(s)`,
-//       updatedOrders: driverOrders.map((order) => ({
-//         orderId: order.orderId,
-//         driverOrderId: order.id,
-//         drvStatus: "On the Way",
-//       })),
-//     };
-//   } catch (error) {
-//     console.error("Error in reStartJourneyDAO:", error);
-//     throw error;
-//   }
-// };
-
-
+// Restart Journey DAO
 exports.reStartJourneyDAO = async (driverId, orderIds) => {
   try {
     // Step 1: Get driverorders records for the given orderIds and driverId
@@ -1491,7 +1083,7 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
       `SELECT id, orderId, drvStatus 
        FROM driverorders 
        WHERE driverId = ? AND orderId IN (?)`,
-      [driverId, orderIds]
+      [driverId, orderIds],
     );
 
     if (driverOrders.length === 0) {
@@ -1509,7 +1101,7 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
     // Step 2: Check if any orders are already in ongoing process
     const ongoingOrders = driverOrders.filter(
       (order) =>
-        order.drvStatus === "On the Way" || order.drvStatus === "Arrived"
+        order.drvStatus === "On the Way" || order.drvStatus === "Arrived",
     );
 
     if (ongoingOrders.length > 0) {
@@ -1525,7 +1117,7 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
       `UPDATE driverorders 
        SET drvStatus = 'On the Way'
        WHERE id IN (?)`,
-      [driverOrderIds]
+      [driverOrderIds],
     );
 
     // Step 4: Update ONLY the latest (last inserted) record in driverholdorders for each drvOrderId
@@ -1540,7 +1132,7 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
            GROUP BY drvOrderId
          ) AS latest_records
        )`,
-      [driverOrderIds]
+      [driverOrderIds],
     );
 
     // Step 5: Update processorders table status to "On the Way"
@@ -1549,7 +1141,7 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
       `UPDATE processorders 
        SET status = 'On the Way'
        WHERE id IN (?)`,
-      [validOrderIds]
+      [validOrderIds],
     );
 
     return {
