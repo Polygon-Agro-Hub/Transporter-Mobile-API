@@ -26,7 +26,11 @@ exports.loginUser = async (empId, password) => {
     }
 
     const user = results[0];
-    
+
+    if (user.status === "Rejected") {
+      throw new Error("This EMP ID is Rejected");
+    }
+
     // Check if user status is "Approved"
     if (user.status !== "Approved") {
       throw new Error("EMP ID not approved");
