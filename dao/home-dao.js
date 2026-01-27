@@ -188,7 +188,6 @@ exports.getAmount = async (driverId) => {
                 });
               });
 
-              console.log("\n=== LOCATION GROUPING DETAILS ===");
               console.log("Total unique locations:", locationMap.size);
 
               let pendingLocationsCount = 0;
@@ -213,7 +212,6 @@ exports.getAmount = async (driverId) => {
                   if (!isFinished || !o.deliveredDate || !todayDate)
                     return false;
 
-                  // Compare dates directly (both are already DATE types from SQL)
                   const orderDate = new Date(o.deliveredDate).toDateString();
                   const todayDateStr = new Date(todayDate).toDateString();
 
@@ -221,9 +219,6 @@ exports.getAmount = async (driverId) => {
                 }).length;
 
                 console.log(`\nLocation: ${location.locationKey}`);
-                console.log(`  Total orders: ${totalOrders}`);
-                console.log(`  Pending orders: ${pendingOrders}`);
-                console.log(`  Today finished: ${todayFinishedOrders}`);
                 console.log(
                   `  Order IDs: ${orders.map((o) => o.orderId).join(", ")}`,
                 );
@@ -239,7 +234,6 @@ exports.getAmount = async (driverId) => {
 
                 if (pendingOrders > 0) {
                   pendingLocationsCount++;
-                  console.log(`  ✓ PENDING LOCATION`);
                 }
 
                 if (
@@ -248,16 +242,8 @@ exports.getAmount = async (driverId) => {
                   todayFinishedOrders === totalOrders
                 ) {
                   todayCompletedLocationsCount++;
-                  console.log(`  ✓ COMPLETED TODAY`);
                 }
               });
-
-              console.log("\n=== FINAL COUNTS ===");
-              console.log("Pending locations:", pendingLocationsCount);
-              console.log(
-                "Today completed locations:",
-                todayCompletedLocationsCount,
-              );
 
               result.pendingLocationsCount = pendingLocationsCount;
               result.todayCompletedLocationsCount =
@@ -313,8 +299,6 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
           return reject(new Error("Failed to fetch amount"));
         }
 
-        console.log("Raw DB results:", results);
-
         // Format the results
         const formattedResults = results.map((item) => ({
           id: String(item.driverOrderId),
@@ -324,8 +308,6 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
           selected: false,
           createdAt: item.createdAt,
         }));
-
-        console.log("Formatted results:", formattedResults);
 
         resolve(formattedResults);
       },
@@ -385,7 +367,6 @@ exports.getOrderAmounts = async (orderIds) => {
 // Updated handOverCash method
 exports.handOverCash = async (orderDetails, officerId) => {
   return new Promise((resolve, reject) => {
-    // Build CASE statement for individual amounts
     const caseStatements = orderDetails
       .map((order) => `WHEN id = ${order.id} THEN ${order.amount}`)
       .join(" ");
@@ -409,8 +390,6 @@ exports.handOverCash = async (orderDetails, officerId) => {
         console.error("Database error updating hand over:", err.message);
         return reject(new Error("Failed to hand over cash"));
       }
-
-      console.log("Hand over update results:", results);
 
       if (results.affectedRows === 0) {
         return reject(new Error("No orders were updated"));

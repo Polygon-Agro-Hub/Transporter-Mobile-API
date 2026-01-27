@@ -52,7 +52,7 @@ exports.loginUser = async (empId, password) => {
       image: user.image,
     };
   } catch (err) {
-    // Pass the specific error message
+
     throw new Error(err.message);
   }
 };

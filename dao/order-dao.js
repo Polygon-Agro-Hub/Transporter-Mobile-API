@@ -267,7 +267,6 @@ exports.getDriverOrdersDAO = async (
       if (statuses.length === 1 && statuses[0] === "Completed") {
         sql += ` AND do.drvStatus = 'Completed' AND DATE(po.deliveredTime) = DATE(?)`;
         params.push(targetDate);
-        console.log(`Fetching ONLY completed orders for date: ${targetDate}`);
       } else {
         sql += ` AND (
           do.drvStatus != 'Completed' 
@@ -277,9 +276,6 @@ exports.getDriverOrdersDAO = async (
           )
         )`;
         params.push(targetDate);
-        console.log(
-          `Fetching mixed statuses, filtering completed by date: ${targetDate}`,
-        );
       }
     }
 
@@ -337,20 +333,20 @@ exports.getDriverOrdersDAO = async (
             addressDetails:
               buildingType === "House"
                 ? {
-                    houseNo: order.house_houseNo,
-                    streetName: order.house_streetName,
-                    city: order.house_city,
-                  }
+                  houseNo: order.house_houseNo,
+                  streetName: order.house_streetName,
+                  city: order.house_city,
+                }
                 : buildingType === "Apartment"
                   ? {
-                      buildingNo: order.apartment_buildingNo,
-                      buildingName: order.apartment_buildingName,
-                      unitNo: order.apartment_unitNo,
-                      floorNo: order.apartment_floorNo,
-                      houseNo: order.apartment_houseNo,
-                      streetName: order.apartment_streetName,
-                      city: order.apartment_city,
-                    }
+                    buildingNo: order.apartment_buildingNo,
+                    buildingName: order.apartment_buildingName,
+                    unitNo: order.apartment_unitNo,
+                    floorNo: order.apartment_floorNo,
+                    houseNo: order.apartment_houseNo,
+                    streetName: order.apartment_streetName,
+                    city: order.apartment_city,
+                  }
                   : null,
           };
         }
@@ -583,8 +579,6 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
 
     const params = [driverId, processOrderIds];
 
-    console.log("Executing SQL with params:", params);
-
     db.collectionofficer.query(sql, params, (err, results) => {
       if (err) {
         console.error(
@@ -747,8 +741,6 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
           AND orderId IN (?)
           AND isHandOver = 0
         `;
-
-        console.log("Updating driverorders:", [driverId, orderIds]);
 
         db.collectionofficer.query(
           updateDriverOrdersSql,
@@ -1094,7 +1086,6 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
       };
     }
 
-    // Extract driverorder IDs and order IDs
     const driverOrderIds = driverOrders.map((order) => order.id);
     const validOrderIds = driverOrders.map((order) => order.orderId);
 
@@ -1136,7 +1127,7 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
     );
 
     // Step 5: Update processorders table status to "On the Way"
-    // The orderId in driverorders corresponds to the id in processorders
+
     await db.marketPlace.promise().query(
       `UPDATE processorders 
        SET status = 'On the Way'

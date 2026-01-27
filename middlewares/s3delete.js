@@ -18,13 +18,13 @@ const r2Client = new S3Client({
 const deleteFromR2 = async (imageUrl) => {
   console.log("Image URL to delete:", imageUrl);
   const extractFolderAndFileName = (url) => {
-    const path = new URL(url).pathname; // e.g. "/users/profile-images/9fa31699-04b0-4638-9890-d5bb6f6fef88.jpg"
+    const path = new URL(url).pathname;
     const pathSegments = path.split("/");
 
     const folder = pathSegments.slice(1, -1).join("/");
     console.log("Folder Path:", folder);
 
-    const fileName = pathSegments[pathSegments.length - 1]; // e.g. "9fa31699-04b0-4638-9890-d5bb6f6fef88.jpg"
+    const fileName = pathSegments[pathSegments.length - 1];
     console.log("File Name:", fileName);
 
     return { folder, fileName };
