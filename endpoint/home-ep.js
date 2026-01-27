@@ -86,8 +86,6 @@ exports.handOverCash = asyncHandler(async (req, res) => {
     });
   }
 
-  console.log("Hand over request:", { orderIds, totalAmount, empId, driverId });
-
   try {
     // Get officer ID from empId
     const officer = await homeDao.getOfficerByEmpId(empId);
@@ -100,7 +98,6 @@ exports.handOverCash = asyncHandler(async (req, res) => {
 
     const officerId = officer.id;
 
-    // Get the individual order amounts before updating
     const orderDetails = await homeDao.getOrderAmounts(orderIds);
 
     if (!orderDetails || orderDetails.length === 0) {

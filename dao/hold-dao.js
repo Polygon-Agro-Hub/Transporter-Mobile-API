@@ -55,7 +55,7 @@ exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
                         if (error) {
                             connection.release();
                             return reject(
-                                new Error("Failed to fetch invoice numbers: " + error.message)
+                                new Error("Failed to fetch invoice numbers: " + error.message),
                             );
                         }
 
@@ -72,113 +72,154 @@ exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
                             invNo: row.invNo,
                         }));
 
-                        // Step 1: Update processorders table status to "Hold"
                         const updateProcessOrdersQuery = `
                             UPDATE market_place.processorders 
                             SET status = 'Hold' 
                             WHERE id IN (?)
                         `;
 
-                        connection.query(updateProcessOrdersQuery, [orderIds], (error, processOrdersResult) => {
-                            if (error) {
-                                return connection.rollback(() => {
-                                    connection.release();
-                                    reject(new Error("Failed to update process orders: " + error.message));
-                                });
-                            }
+                        connection.query(
+                            updateProcessOrdersQuery,
+                            [orderIds],
+                            (error, processOrdersResult) => {
+                                if (error) {
+                                    return connection.rollback(() => {
+                                        connection.release();
+                                        reject(
+                                            new Error(
+                                                "Failed to update process orders: " + error.message,
+                                            ),
+                                        );
+                                    });
+                                }
 
-                            // Check if any orders were updated
-                            if (processOrdersResult.affectedRows === 0) {
-                                return connection.rollback(() => {
-                                    connection.release();
-                                    reject(new Error("No orders found with the provided IDs"));
-                                });
-                            }
+                                if (processOrdersResult.affectedRows === 0) {
+                                    return connection.rollback(() => {
+                                        connection.release();
+                                        reject(new Error("No orders found with the provided IDs"));
+                                    });
+                                }
 
-                            // Step 2: Get driver order IDs from driverorders table
-                            const getDriverOrdersQuery = `
+                                const getDriverOrdersQuery = `
                                 SELECT id 
                                 FROM collection_officer.driverorders 
                                 WHERE orderId IN (?)
                             `;
 
-                            connection.query(getDriverOrdersQuery, [orderIds], (error, driverOrdersResult) => {
-                                if (error) {
-                                    return connection.rollback(() => {
-                                        connection.release();
-                                        reject(new Error("Failed to fetch driver orders: " + error.message));
-                                    });
-                                }
+                                connection.query(
+                                    getDriverOrdersQuery,
+                                    [orderIds],
+                                    (error, driverOrdersResult) => {
+                                        if (error) {
+                                            return connection.rollback(() => {
+                                                connection.release();
+                                                reject(
+                                                    new Error(
+                                                        "Failed to fetch driver orders: " + error.message,
+                                                    ),
+                                                );
+                                            });
+                                        }
 
-                                if (driverOrdersResult.length === 0) {
-                                    return connection.rollback(() => {
-                                        connection.release();
-                                        reject(new Error("No driver orders found for the provided order IDs"));
-                                    });
-                                }
+                                        if (driverOrdersResult.length === 0) {
+                                            return connection.rollback(() => {
+                                                connection.release();
+                                                reject(
+                                                    new Error(
+                                                        "No driver orders found for the provided order IDs",
+                                                    ),
+                                                );
+                                            });
+                                        }
 
-                                const driverOrderIds = driverOrdersResult.map(row => row.id);
+                                        const driverOrderIds = driverOrdersResult.map(
+                                            (row) => row.id,
+                                        );
 
-                                // Step 3: Update driverorders table drvStatus to "Hold"
-                                const updateDriverOrdersQuery = `
+                                        const updateDriverOrdersQuery = `
                                     UPDATE collection_officer.driverorders 
                                     SET drvStatus = 'Hold' 
                                     WHERE id IN (?)
                                 `;
 
-                                connection.query(updateDriverOrdersQuery, [driverOrderIds], (error, updateDriverResult) => {
-                                    if (error) {
-                                        return connection.rollback(() => {
-                                            connection.release();
-                                            reject(new Error("Failed to update driver orders status: " + error.message));
-                                        });
-                                    }
+                                        connection.query(
+                                            updateDriverOrdersQuery,
+                                            [driverOrderIds],
+                                            (error, updateDriverResult) => {
+                                                if (error) {
+                                                    return connection.rollback(() => {
+                                                        connection.release();
+                                                        reject(
+                                                            new Error(
+                                                                "Failed to update driver orders status: " +
+                                                                error.message,
+                                                            ),
+                                                        );
+                                                    });
+                                                }
 
-                                    // Step 4: Insert into driverholdorders table (allows multiple holds)
-                                    const insertHoldOrdersQuery = `
+                                                const insertHoldOrdersQuery = `
                                         INSERT INTO collection_officer.driverholdorders (drvOrderId, holdReasonId) 
                                         VALUES ?
                                     `;
 
-                                    const holdOrdersData = driverOrderIds.map(drvOrderId => [
-                                        drvOrderId,
-                                        holdReasonId
-                                    ]);
+                                                const holdOrdersData = driverOrderIds.map(
+                                                    (drvOrderId) => [drvOrderId, holdReasonId],
+                                                );
 
-                                    connection.query(insertHoldOrdersQuery, [holdOrdersData], (error, insertResult) => {
-                                        if (error) {
-                                            return connection.rollback(() => {
-                                                connection.release();
-                                                reject(new Error("Failed to insert hold orders: " + error.message));
-                                            });
-                                        }
+                                                connection.query(
+                                                    insertHoldOrdersQuery,
+                                                    [holdOrdersData],
+                                                    (error, insertResult) => {
+                                                        if (error) {
+                                                            return connection.rollback(() => {
+                                                                connection.release();
+                                                                reject(
+                                                                    new Error(
+                                                                        "Failed to insert hold orders: " +
+                                                                        error.message,
+                                                                    ),
+                                                                );
+                                                            });
+                                                        }
 
-                                        // Commit transaction
-                                        connection.commit((err) => {
-                                            if (err) {
-                                                return connection.rollback(() => {
-                                                    connection.release();
-                                                    reject(new Error("Transaction commit failed: " + err.message));
-                                                });
-                                            }
+                                                        // Commit transaction
+                                                        connection.commit((err) => {
+                                                            if (err) {
+                                                                return connection.rollback(() => {
+                                                                    connection.release();
+                                                                    reject(
+                                                                        new Error(
+                                                                            "Transaction commit failed: " +
+                                                                            err.message,
+                                                                        ),
+                                                                    );
+                                                                });
+                                                            }
 
-                                            // Release connection back to pool
-                                            connection.release();
+                                                            // Release connection back to pool
+                                                            connection.release();
 
-                                            resolve({
-                                                processOrdersUpdated: processOrdersResult.affectedRows,
-                                                driverOrdersUpdated: updateDriverResult.affectedRows,
-                                                holdOrdersInserted: insertResult.affectedRows,
-                                                driverOrderIds: driverOrderIds,
-                                                invoiceNumbers: invoiceNumbers,
-                                                orderDetails: orderDetails,
-                                            });
-                                        });
-                                    });
-                                });
-                            });
-                        });
-                    }
+                                                            resolve({
+                                                                processOrdersUpdated:
+                                                                    processOrdersResult.affectedRows,
+                                                                driverOrdersUpdated:
+                                                                    updateDriverResult.affectedRows,
+                                                                holdOrdersInserted: insertResult.affectedRows,
+                                                                driverOrderIds: driverOrderIds,
+                                                                invoiceNumbers: invoiceNumbers,
+                                                                orderDetails: orderDetails,
+                                                            });
+                                                        });
+                                                    },
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    },
                 );
             });
         });

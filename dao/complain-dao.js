@@ -1,9 +1,7 @@
 const db = require("../startup/database");
 
-// Add Complain
 exports.AddComplain = async (driverId, complainCategory, complain) => {
     return new Promise((resolve, reject) => {
-        // First, get the officer's empId
         const getEmpIdSql = `
             SELECT empId 
             FROM collection_officer.collectionofficer 
@@ -23,17 +21,14 @@ exports.AddComplain = async (driverId, complainCategory, complain) => {
 
             const empId = empResults[0].empId;
 
-            // Get today's date in YYMMDD format
             const today = new Date();
             const year = today.getFullYear().toString().slice(-2);
-            const month = String(today.getMonth() + 1).padStart(2, '0');
-            const day = String(today.getDate()).padStart(2, '0');
+            const month = String(today.getMonth() + 1).padStart(2, "0");
+            const day = String(today.getDate()).padStart(2, "0");
             const dateStr = year + month + day;
 
-            // Generate the prefix for today's complaints
             const refPrefix = `${empId}${dateStr}`;
 
-            // Get the count of complaints with this prefix today
             const getCountSql = `
                 SELECT COUNT(*) as count 
                 FROM collection_officer.drivercomplains 
@@ -41,48 +36,53 @@ exports.AddComplain = async (driverId, complainCategory, complain) => {
                 AND DATE(createdAt) = CURDATE()
             `;
 
-            db.collectionofficer.query(getCountSql, [`${refPrefix}%`], (err, countResults) => {
-                if (err) {
-                    console.error("Database error counting complaints:", err.message);
-                    return reject(new Error("Failed to generate reference number"));
-                }
+            db.collectionofficer.query(
+                getCountSql,
+                [`${refPrefix}%`],
+                (err, countResults) => {
+                    if (err) {
+                        console.error("Database error counting complaints:", err.message);
+                        return reject(new Error("Failed to generate reference number"));
+                    }
 
-                // Increment the count by 1 for the new complaint
-                const nextNumber = (countResults[0].count + 1).toString().padStart(3, '0');
-                const refNo = `${refPrefix}${nextNumber}`;
+                    const nextNumber = (countResults[0].count + 1)
+                        .toString()
+                        .padStart(3, "0");
+                    const refNo = `${refPrefix}${nextNumber}`;
 
-                // Insert the complaint
-                const insertSql = `
+                    const insertSql = `
                     INSERT INTO collection_officer.drivercomplains 
                     (driverId, complainCategory, refNo, complain, status, createdAt) 
                     VALUES (?, ?, ?, ?, 'Opened', NOW())
                 `;
 
-                db.collectionofficer.query(
-                    insertSql,
-                    [driverId, complainCategory, refNo, complain],
-                    (err, result) => {
-                        if (err) {
-                            console.error("Database error inserting complaint:", err.message);
-                            return reject(new Error("Failed to insert complaint"));
-                        }
+                    db.collectionofficer.query(
+                        insertSql,
+                        [driverId, complainCategory, refNo, complain],
+                        (err, result) => {
+                            if (err) {
+                                console.error(
+                                    "Database error inserting complaint:",
+                                    err.message,
+                                );
+                                return reject(new Error("Failed to insert complaint"));
+                            }
 
-                        resolve({
-                            message: "Complaint submitted successfully",
-                            refNo: refNo,
-                            complainId: result.insertId
-                        });
-                    }
-                );
-            });
+                            resolve({
+                                message: "Complaint submitted successfully",
+                                refNo: refNo,
+                                complainId: result.insertId,
+                            });
+                        },
+                    );
+                },
+            );
         });
     });
 };
 
-// Get Complain Categories
 exports.GetComplainCategories = async () => {
     return new Promise((resolve, reject) => {
-        // First, get the appId for SalesDash
         const getAppIdSql = `
             SELECT id 
             FROM agro_world_admin.systemapplications 
@@ -102,7 +102,6 @@ exports.GetComplainCategories = async () => {
 
             const appId = appResults[0].id;
 
-            // Get complain categories for this appId
             const getCategoriesSql = `
                 SELECT 
                     id,
@@ -126,41 +125,6 @@ exports.GetComplainCategories = async () => {
         });
     });
 };
-
-// Get My Complain
-// exports.GetMyComplains = async (driverId) => {
-//     return new Promise((resolve, reject) => {
-//         const sql = `
-//             SELECT 
-//                 dc.id,
-//                 dc.driverId,
-//                 dc.complainCategory,
-//                 dc.refNo,
-//                 dc.complain,
-//                 dc.reply,
-//                 dc.status,
-//                 dc.adminReplyBy,
-//                 dc.replyTime,
-//                 dc.createdAt,
-//                 cc.categoryEnglish,
-//                 cc.categorySinhala,
-//                 cc.categoryTamil
-//             FROM collection_officer.drivercomplains dc
-//             LEFT JOIN agro_world_admin.complaincategory cc ON dc.complainCategory = cc.id
-//             WHERE dc.driverId = ?
-//             ORDER BY dc.createdAt DESC
-//         `;
-
-//         db.collectionofficer.query(sql, [driverId], (err, results) => {
-//             if (err) {
-//                 console.error("Database error fetching complaints:", err.message);
-//                 return reject(new Error("Failed to fetch complaints"));
-//             }
-
-//             resolve(results);
-//         });
-//     });
-// };
 
 // Get My Complains
 exports.GetMyComplains = async (driverId) => {

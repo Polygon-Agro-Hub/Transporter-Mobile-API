@@ -19,7 +19,6 @@ exports.login = asyncHandler(async (req, res) => {
   }
 
   const { empId, password } = req.body;
-  console.log("Login request received:", req.body);
 
   try {
     const result = await userDao.loginUser(empId, password);
@@ -43,7 +42,7 @@ exports.login = asyncHandler(async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
-      maxAge: 8 * 60 * 60 * 1000, // 8 hours
+      maxAge: 8 * 60 * 60 * 1000,
     });
 
     // Send response with token
@@ -113,7 +112,6 @@ exports.getProfile = asyncHandler(async (req, res) => {
   try {
     console.log("Getting profile for user:", req.user);
 
-    // Use empId from the decoded token
     const empId = req.user.empId;
 
     if (!empId) {
@@ -123,11 +121,7 @@ exports.getProfile = asyncHandler(async (req, res) => {
       });
     }
 
-    console.log("Fetching profile for empId:", empId);
-
     const userProfile = await userDao.getUserProfile(empId);
-
-    console.log("User profile fetched successfully");
 
     return res.status(200).json({
       success: true,
@@ -146,8 +140,6 @@ exports.getProfile = asyncHandler(async (req, res) => {
 // Update Profile Image
 exports.updateProfileImage = asyncHandler(async (req, res) => {
   try {
-    console.log("Updating profile image for user:", req.user);
-
     // Check if file was uploaded
     if (!req.file) {
       return res.status(400).json({
@@ -166,7 +158,7 @@ exports.updateProfileImage = asyncHandler(async (req, res) => {
     }
 
     // Validate file size (max 5MB)
-    const maxSize = 5 * 1024 * 1024; // 5MB in bytes
+    const maxSize = 5 * 1024 * 1024;
     if (req.file.size > maxSize) {
       return res.status(400).json({
         success: false,
@@ -184,19 +176,14 @@ exports.updateProfileImage = asyncHandler(async (req, res) => {
       });
     }
 
-    console.log("Updating profile image for empId:", empId);
-
     // Get current user info to check if they have an existing image
     const currentProfile = await userDao.getUserProfile(empId);
 
-    // Delete old image from R2 if exists
     if (currentProfile.image && currentProfile.image !== "") {
       try {
         await deleteFromR2(currentProfile.image);
-        console.log("Old profile image deleted successfully");
       } catch (deleteError) {
         console.warn("Failed to delete old image:", deleteError.message);
-        // Continue with upload even if delete fails
       }
     }
 
@@ -206,7 +193,6 @@ exports.updateProfileImage = asyncHandler(async (req, res) => {
     const keyPrefix = "users/profile-images";
 
     const imageUrl = await uploadFileToS3(fileBuffer, fileName, keyPrefix);
-    console.log("New image uploaded to:", imageUrl);
 
     // Update profile image in database
     const result = await userDao.updateProfileImage(empId, imageUrl);

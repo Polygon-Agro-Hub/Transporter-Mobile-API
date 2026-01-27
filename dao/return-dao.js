@@ -50,7 +50,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
             if (error) {
               connection.release();
               return reject(
-                new Error("Failed to fetch invoice numbers: " + error.message)
+                new Error("Failed to fetch invoice numbers: " + error.message),
               );
             }
 
@@ -83,8 +83,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                     connection.release();
                     reject(
                       new Error(
-                        "Failed to update process orders: " + error.message
-                      )
+                        "Failed to update process orders: " + error.message,
+                      ),
                     );
                   });
                 }
@@ -112,8 +112,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                         connection.release();
                         reject(
                           new Error(
-                            "Failed to fetch driver orders: " + error.message
-                          )
+                            "Failed to fetch driver orders: " + error.message,
+                          ),
                         );
                       });
                     }
@@ -126,7 +126,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                     }
 
                     const driverOrderIds = driverOrdersResult.map(
-                      (row) => row.id
+                      (row) => row.id,
                     );
 
                     // Step 3.5: Check if any drvOrderId already exists in driverreturnorders
@@ -146,8 +146,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                             reject(
                               new Error(
                                 "Failed to check existing returns: " +
-                                  error.message
-                              )
+                                error.message,
+                              ),
                             );
                           });
                         }
@@ -156,7 +156,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                           return connection.rollback(() => {
                             connection.release();
                             reject(
-                              new Error("Order has already been returned.")
+                              new Error("Order has already been returned."),
                             );
                           });
                         }
@@ -178,8 +178,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                 reject(
                                   new Error(
                                     "Failed to update driver orders: " +
-                                      error.message
-                                  )
+                                    error.message,
+                                  ),
                                 );
                               });
                             }
@@ -192,7 +192,11 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                             `;
 
                             const returnOrdersData = driverOrderIds.map(
-                              (drvOrderId) => [drvOrderId, returnReasonId, note]
+                              (drvOrderId) => [
+                                drvOrderId,
+                                returnReasonId,
+                                note,
+                              ],
                             );
 
                             connection.query(
@@ -205,8 +209,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                     reject(
                                       new Error(
                                         "Failed to insert return orders: " +
-                                          error.message
-                                      )
+                                        error.message,
+                                      ),
                                     );
                                   });
                                 }
@@ -219,8 +223,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                       reject(
                                         new Error(
                                           "Transaction commit failed: " +
-                                            err.message
-                                        )
+                                          err.message,
+                                        ),
                                       );
                                     });
                                   }
@@ -239,17 +243,17 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                     orderDetails,
                                   });
                                 });
-                              }
+                              },
                             );
-                          }
+                          },
                         );
-                      }
+                      },
                     );
-                  }
+                  },
                 );
-              }
+              },
             );
-          }
+          },
         );
       });
     });
@@ -357,13 +361,11 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
     const params = [driverId];
 
-    console.log("Fetching return orders for driver ID:", driverId);
-
     db.collectionofficer.query(sql, params, (err, results) => {
       if (err) {
         console.error(
           "Database error fetching driver return orders:",
-          err.message
+          err.message,
         );
         console.error("SQL:", sql);
         console.error("Params:", params);
@@ -371,25 +373,18 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
       }
 
       console.log(
-        `Found ${results.length} return orders for driver ${driverId}`
+        `Found ${results.length} return orders for driver ${driverId}`,
       );
 
-      // Use a Map to store unique driver orders (based on driverOrderId)
       const uniqueOrdersMap = new Map();
 
       results.forEach((row) => {
-        // If we haven't seen this driverOrderId yet, add it to the map
         if (!uniqueOrdersMap.has(row.driverOrderId)) {
           uniqueOrdersMap.set(row.driverOrderId, row);
         }
       });
 
-      // Convert map values to array
       const uniqueResults = Array.from(uniqueOrdersMap.values());
-
-      console.log(
-        `After deduplication: ${uniqueResults.length} unique return orders`
-      );
 
       if (uniqueResults.length > 0) {
         console.log("Sample unique return order data:", {
@@ -403,9 +398,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         });
       }
 
-      // Format the results
       const formattedResults = uniqueResults.map((row) => {
-        // Format address based on building type
         let formattedAddress = "No Address";
         if (row.buildingType === "House") {
           const parts = [
@@ -439,13 +432,11 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
           returnReasonText = "No reason specified";
         }
 
-        // Get customer full name (prefer order.fullName, fallback to user details)
         const customerName =
           row.fullName ||
           `${row.firstName || ""} ${row.lastName || ""}`.trim() ||
           "Customer";
 
-        // Get title (prefer order.title, fallback to user.title)
         const customerTitle = row.orderTitle || row.userTitle || "";
 
         // Format the return order
@@ -499,13 +490,6 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
           driverOrderCreatedAt: row.driverOrderCreatedAt,
         };
 
-        console.log(`Formatted order ${row.driverOrderId}:`, {
-          drvStatus: formattedOrder.drvStatus,
-          isHandOver: formattedOrder.isHandOver,
-          invoiceNumber: formattedOrder.invoiceNumber,
-          returnReason: formattedOrder.returnDetails.reason,
-        });
-
         return formattedOrder;
       });
 
@@ -517,11 +501,6 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 // Update Return Order to Return Received
 exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
   return new Promise((resolve, reject) => {
-    console.log(
-      `Updating return orders for driver ${driverId}, invoices:`,
-      invoiceNumbers
-    );
-
     // Step 1: Get process order IDs and validate driver ownership
     const getOrdersSql = `
       SELECT 
@@ -540,9 +519,6 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
         AND (do.isHandOver = 0 OR do.isHandOver IS NULL)
     `;
 
-    console.log("SQL Query:", getOrdersSql);
-    console.log("Query Params:", [invoiceNumbers, driverId]);
-
     db.collectionofficer.query(
       getOrdersSql,
       [invoiceNumbers, driverId],
@@ -552,14 +528,11 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
           return reject(new Error("Failed to fetch orders"));
         }
 
-        console.log("Query Results:", orderResults);
-        console.log(`Found ${orderResults.length} return orders to update`);
-
         if (orderResults.length === 0) {
           return reject(
             new Error(
-              "No return orders found with the provided invoice numbers for this driver"
-            )
+              "No return orders found with the provided invoice numbers for this driver",
+            ),
           );
         }
 
@@ -567,10 +540,6 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
         const processOrderIds = orderResults.map((row) => row.processOrderId);
         const driverOrderIds = orderResults.map((row) => row.driverOrderId);
         const foundInvoiceNumbers = orderResults.map((row) => row.invNo);
-
-        console.log("Process Order IDs to update:", processOrderIds);
-        console.log("Driver Order IDs to update:", driverOrderIds);
-        console.log("Found Invoice Numbers:", foundInvoiceNumbers);
 
         // Step 2: Update driverorders table - set drvStatus to 'Return Received'
         const updateDriverOrdersSql = `
@@ -583,9 +552,6 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
             AND drvStatus = 'Return'
         `;
 
-        console.log("Update Driver SQL:", updateDriverOrdersSql);
-        console.log("Update Driver Params:", [driverOrderIds, driverId]);
-
         db.collectionofficer.query(
           updateDriverOrdersSql,
           [driverOrderIds, driverId],
@@ -595,19 +561,12 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
               return reject(new Error("Failed to update driver orders"));
             }
 
-            console.log(
-              `Updated ${driverResult.affectedRows} driver orders to 'Return Received'`
-            );
-
             // Step 3: Update processorders table - set status to 'Return Received'
             const updateProcessOrdersSql = `
           UPDATE market_place.processorders 
           SET status = 'Return Received'
           WHERE id IN (?)
         `;
-
-            console.log("Update Process SQL:", updateProcessOrdersSql);
-            console.log("Update Process Params:", [processOrderIds]);
 
             db.collectionofficer.query(
               updateProcessOrdersSql,
@@ -617,10 +576,6 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
                   console.error("Error updating processorders:", err);
                   return reject(new Error("Failed to update process orders"));
                 }
-
-                console.log(
-                  `Updated ${processResult.affectedRows} process orders to 'Return Received'`
-                );
 
                 // Step 4: Get updated order details for response
                 const getUpdatedOrdersSql = `
@@ -644,11 +599,9 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
                     if (err) {
                       console.error("Error fetching updated orders:", err);
                       return reject(
-                        new Error("Failed to fetch updated orders")
+                        new Error("Failed to fetch updated orders"),
                       );
                     }
-
-                    console.log("Updated Results:", updatedResults);
 
                     resolve({
                       success: true,
@@ -658,13 +611,13 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
                       invoiceNumbers: foundInvoiceNumbers,
                       timestamp: new Date().toISOString(),
                     });
-                  }
+                  },
                 );
-              }
+              },
             );
-          }
+          },
         );
-      }
+      },
     );
   });
 };
