@@ -76,7 +76,7 @@ exports.changePassword = asyncHandler(async (req, res) => {
     const result = await userDao.changePassword(
       officerId,
       currentPassword,
-      newPassword
+      newPassword,
     );
     res.status(200).json({
       status: "success",
