@@ -26,7 +26,11 @@ exports.loginUser = async (empId, password) => {
     }
 
     const user = results[0];
-    
+
+    if (user.status === "Rejected") {
+      throw new Error("This EMP ID is Rejected");
+    }
+
     // Check if user status is "Approved"
     if (user.status !== "Approved") {
       throw new Error("EMP ID not approved");
@@ -48,7 +52,6 @@ exports.loginUser = async (empId, password) => {
       image: user.image,
     };
   } catch (err) {
-    // Pass the specific error message
     throw new Error(err.message);
   }
 };
@@ -72,7 +75,7 @@ exports.changePassword = async (officerId, currentPassword, newPassword) => {
       const user = results[0];
       const isPasswordValid = await bcrypt.compare(
         currentPassword,
-        user.password
+        user.password,
       );
       if (!isPasswordValid) {
         return reject(new Error("Current password is incorrect"));
@@ -92,7 +95,7 @@ exports.changePassword = async (officerId, currentPassword, newPassword) => {
             return reject(new Error("Database error"));
           }
           resolve({ success: true, message: "Password changed successfully" });
-        }
+        },
       );
     });
   });
@@ -123,13 +126,13 @@ exports.getUserProfile = async (empId) => {
     const [results] = await db.collectionofficer.promise().query(sql, [empId]);
 
     if (results.length === 0) {
-      throw new Error("User not found");
+      // Throw a specific error that can be caught in controller
+      throw new Error("USER_NOT_FOUND");
     }
 
     const user = results[0];
 
     return {
-      success: true,
       empId: user.empId,
       firstNameEnglish: user.firstNameEnglish || "",
       lastNameEnglish: user.lastNameEnglish || "",
@@ -143,6 +146,10 @@ exports.getUserProfile = async (empId) => {
       vRegNo: user.vRegNo || null,
     };
   } catch (err) {
+    // Re-throw the error with proper context
+    if (err.message === "USER_NOT_FOUND") {
+      throw new Error("User not found or account not approved");
+    }
     throw new Error("Database error: " + err.message);
   }
 };

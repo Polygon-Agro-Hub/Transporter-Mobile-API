@@ -1,6 +1,9 @@
 const returnDao = require("../dao/return-dao");
 const asyncHandler = require("express-async-handler");
-const { submitReturnSchema, updateReturnReceivedSchema } = require("../validations/return-validation");
+const {
+  submitReturnSchema,
+  updateReturnReceivedSchema,
+} = require("../validations/return-validation");
 
 // Get All Return Reasons
 exports.getReason = asyncHandler(async (req, res) => {
@@ -70,8 +73,8 @@ exports.submitReturn = asyncHandler(async (req, res) => {
         driverOrdersUpdated: result.driverOrdersUpdated,
         returnOrdersInserted: result.returnOrdersInserted,
         orderIds: orderIds,
-        invoiceNumbers: result.invoiceNumbers || [], 
-        orderDetails: result.orderDetails || [], 
+        invoiceNumbers: result.invoiceNumbers || [],
+        orderDetails: result.orderDetails || [],
       },
     });
   } catch (error) {
@@ -160,7 +163,7 @@ exports.updateReturnReceived = asyncHandler(async (req, res) => {
     // Update the return orders to Return Received status
     const result = await returnDao.updateReturnReceived({
       invoiceNumbers,
-      driverId
+      driverId,
     });
 
     res.status(200).json({
@@ -170,11 +173,14 @@ exports.updateReturnReceived = asyncHandler(async (req, res) => {
         driverOrdersUpdated: result.driverOrdersUpdated,
         processOrdersUpdated: result.processOrdersUpdated,
         invoiceNumbers: invoiceNumbers,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       },
     });
   } catch (error) {
-    console.error("Error updating return orders to Return Received:", error.message);
+    console.error(
+      "Error updating return orders to Return Received:",
+      error.message,
+    );
 
     // Check for specific error types
     if (error.message.includes("No return orders found")) {
@@ -193,7 +199,8 @@ exports.updateReturnReceived = asyncHandler(async (req, res) => {
 
     res.status(500).json({
       status: "error",
-      message: error.message || "Failed to update return orders. Please try again.",
+      message:
+        error.message || "Failed to update return orders. Please try again.",
     });
   }
 });
