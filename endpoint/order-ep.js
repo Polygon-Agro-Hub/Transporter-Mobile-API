@@ -10,7 +10,6 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
       message: "Unauthorized: User authentication required",
     });
   }
-
   const driverId = req.user.id;
   const { invNo } = req.body;
 
@@ -24,9 +23,7 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
 
   try {
     const driverEmpId = await orderDao.GetDriverEmpId(driverId);
-
     const orderInfo = await orderDao.GetProcessOrderInfoByInvNo(invNo);
-
     const assignmentCheck = await orderDao.CheckOrderAlreadyAssigned(
       orderInfo.id,
       driverId,
@@ -39,6 +36,8 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
           status: "error",
           message: "This order is already in your target list.",
           driverEmpId: driverEmpId,
+          currentStatus: orderInfo.status,  // ADDED
+          invNo: orderInfo.invNo,           // ADDED
         });
       } else {
         return res.status(409).json({
@@ -46,6 +45,8 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
           message: `This order has already been collected by another officer (Officer ID: ${assignmentCheck.assignedDriverEmpId}).`,
           assignedDriverEmpId: assignmentCheck.assignedDriverEmpId,
           assignedDriverName: assignmentCheck.assignedDriverName,
+          currentStatus: orderInfo.status,  // ADDED
+          invNo: orderInfo.invNo,           // ADDED
         });
       }
     }
@@ -56,12 +57,12 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
         message:
           "Still processing this order. Scanning will be available after it's set to Out For Delivery.",
         currentStatus: orderInfo.status,
+        invNo: orderInfo.invNo,
       });
     }
 
     const handOverTime = new Date();
     handOverTime.setHours(handOverTime.getHours() + 24);
-
     const result = await orderDao.SaveDriverOrder(
       driverId,
       orderInfo.id,
