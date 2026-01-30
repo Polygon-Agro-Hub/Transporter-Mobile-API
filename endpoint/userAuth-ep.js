@@ -112,27 +112,49 @@ exports.getProfile = asyncHandler(async (req, res) => {
   try {
     console.log("Getting profile for user:", req.user);
 
+    // Use empId from the decoded token
     const empId = req.user.empId;
 
     if (!empId) {
       return res.status(400).json({
         success: false,
+        status: "error",
         message: "Employee ID not found in token",
       });
     }
 
+    console.log("Fetching profile for empId:", empId);
+
     const userProfile = await userDao.getUserProfile(empId);
+
+    console.log("User profile fetched successfully");
 
     return res.status(200).json({
       success: true,
+      status: "success",
       message: "User profile fetched successfully",
       data: userProfile,
     });
   } catch (err) {
     console.error("Get profile failed:", err.message);
-    return res.status(404).json({
+
+    // Determine the type of error
+    let statusCode = 500;
+    let errorMessage = err.message;
+
+    if (err.message.includes("User not found")) {
+      statusCode = 404;
+      errorMessage =
+        "User account not found or not approved. Please contact support.";
+    } else if (err.message.includes("Database error")) {
+      statusCode = 500;
+      errorMessage = "Database error occurred. Please try again.";
+    }
+
+    return res.status(statusCode).json({
       success: false,
-      message: err.message,
+      status: "error",
+      message: errorMessage,
     });
   }
 });
