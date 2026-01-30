@@ -10,7 +10,6 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
       message: "Unauthorized: User authentication required",
     });
   }
-
   const driverId = req.user.id;
   const { invNo } = req.body;
 
@@ -23,17 +22,11 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
   }
 
   try {
-    // Step 1: Get driver's empId for response
     const driverEmpId = await orderDao.GetDriverEmpId(driverId);
-
-    // Step 2: Get process order ID and check status by invoice number
     const orderInfo = await orderDao.GetProcessOrderInfoByInvNo(invNo);
-
-    // Step 3: Check if order is already assigned to any driver FIRST
-    // This should happen BEFORE checking "Out For Delivery" status
     const assignmentCheck = await orderDao.CheckOrderAlreadyAssigned(
       orderInfo.id,
-      driverId
+      driverId,
     );
 
     if (assignmentCheck.isAssigned) {
@@ -43,6 +36,8 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
           status: "error",
           message: "This order is already in your target list.",
           driverEmpId: driverEmpId,
+          currentStatus: orderInfo.status,  // ADDED
+          invNo: orderInfo.invNo,           // ADDED
         });
       } else {
         return res.status(409).json({
@@ -50,33 +45,30 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
           message: `This order has already been collected by another officer (Officer ID: ${assignmentCheck.assignedDriverEmpId}).`,
           assignedDriverEmpId: assignmentCheck.assignedDriverEmpId,
           assignedDriverName: assignmentCheck.assignedDriverName,
+          currentStatus: orderInfo.status,  // ADDED
+          invNo: orderInfo.invNo,           // ADDED
         });
       }
     }
 
-    // Step 4: NOW check if order status is "Out For Delivery"
-    // Only check this if order is NOT already assigned
     if (orderInfo.status !== "Out For Delivery") {
       return res.status(400).json({
         status: "error",
         message:
           "Still processing this order. Scanning will be available after it's set to Out For Delivery.",
         currentStatus: orderInfo.status,
+        invNo: orderInfo.invNo,
       });
     }
 
-    // Step 5: Generate handOverTime (current time + 24 hours)
     const handOverTime = new Date();
     handOverTime.setHours(handOverTime.getHours() + 24);
-
-    // Step 6: Save driver order
     const result = await orderDao.SaveDriverOrder(
       driverId,
       orderInfo.id,
-      handOverTime
+      handOverTime,
     );
 
-    // Step 7: Return success response with driver info
     res.status(201).json({
       status: "success",
       message: "Order assigned successfully to your target list",
@@ -116,65 +108,7 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
   }
 });
 
-// Get Driver's Order
-// exports.GetDriverOrders = asyncHandler(async (req, res) => {
-//   if (!req.user || !req.user.id) {
-//     return res.status(401).json({
-//       status: "error",
-//       message: "Unauthorized: User authentication required",
-//     });
-//   }
-
-//   const driverId = req.user.id;
-//   let { status, isHandOver } = req.query;
-
-//   try {
-//     //const handoverFilter = isHandOver !== undefined ? parseInt(isHandOver) : 0;
-//     const handoverFilter = isHandOver !== undefined ? parseInt(isHandOver) : null;
-
-//     let statuses = [];
-//     if (status) {
-//       if (typeof status === "string") {
-//         statuses = status.split(",").map((s) => s.trim());
-//       } else if (Array.isArray(status)) {
-//         statuses = status;
-//       }
-
-//       statuses = statuses.map((s) => {
-//         const lower = s.toLowerCase();
-//         if (lower === "todo") return "Todo";
-//         if (lower === "completed") return "Completed";
-//         if (lower === "hold") return "Hold";
-//         if (lower === "return") return "Return";
-//         if (lower === "on the way") return "On the way";
-//         return s;
-//       });
-//     }
-
-//     const orders = await orderDao.getDriverOrdersDAO(
-//       driverId,
-//       statuses,
-//       handoverFilter
-//     );
-
-//     console.log("FINAL ORDERS RESPONSE:", orders);
-
-//     res.status(200).json({
-//       status: "success",
-//       data: {
-//         orders,
-//         totalOrders: orders.length,
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Error fetching driver orders:", error);
-//     res.status(500).json({
-//       status: "error",
-//       message: "Failed to fetch orders",
-//     });
-//   }
-// });
-
+// Get Driver Orders
 exports.GetDriverOrders = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
     return res.status(401).json({
@@ -221,7 +155,7 @@ exports.GetDriverOrders = asyncHandler(async (req, res) => {
       driverId,
       statuses,
       handoverFilter,
-      filterDate
+      filterDate,
     );
 
     // Count orders by status
@@ -271,8 +205,6 @@ exports.GetOrderUserDetails = asyncHandler(async (req, res) => {
       });
     }
 
-    console.log("Received orderIds:", orderIds);
-
     // Convert comma-separated string to array
     let orderIdArray = [];
     if (typeof orderIds === "string") {
@@ -296,10 +228,8 @@ exports.GetOrderUserDetails = asyncHandler(async (req, res) => {
     // Fetch user and order details
     const result = await orderDao.getOrderUserDetailsDAO(
       driverId,
-      orderIdArray
+      orderIdArray,
     );
-
-    console.log(JSON.stringify(result, null, 2));
 
     if (!result || !result.user) {
       return res.status(404).json({
@@ -328,7 +258,7 @@ exports.StartJourney = asyncHandler(async (req, res) => {
       status: "error",
       message: "Unauthorized: User authentication required",
     };
-    console.log("StartJourney Response:", response);
+
     return res.status(401).json(response);
   }
 
@@ -342,7 +272,7 @@ exports.StartJourney = asyncHandler(async (req, res) => {
         status: "error",
         message: "orderIds parameter is required",
       };
-      console.log("StartJourney Response:", response);
+
       return res.status(400).json(response);
     }
 
@@ -364,16 +294,9 @@ exports.StartJourney = asyncHandler(async (req, res) => {
         status: "error",
         message: "Valid order IDs are required",
       };
-      console.log("StartJourney Response:", response);
+
       return res.status(400).json(response);
     }
-
-    console.log(
-      "Starting journey for driver:",
-      driverId,
-      "with order IDs:",
-      orderIdArray
-    );
 
     // Start the journey
     const result = await orderDao.startJourneyDAO(driverId, orderIdArray);
@@ -386,16 +309,15 @@ exports.StartJourney = asyncHandler(async (req, res) => {
           updatedOrders: result.updatedOrders,
         },
       };
-      console.log("StartJourney Response:", response);
+
       return res.status(200).json(response);
     } else {
-      // IMPORTANT: Include ongoingProcessOrderIds in the error response
       const response = {
         status: "error",
         message: result.message,
         ongoingProcessOrderIds: result.ongoingProcessOrderIds || [],
       };
-      console.log("StartJourney Response:", response);
+
       return res.status(400).json(response);
     }
   } catch (error) {
@@ -404,7 +326,7 @@ exports.StartJourney = asyncHandler(async (req, res) => {
       status: "error",
       message: "Failed to start journey",
     };
-    console.log("StartJourney Response:", response);
+
     return res.status(500).json(response);
   }
 });
@@ -456,7 +378,7 @@ exports.saveSignature = asyncHandler(async (req, res) => {
     // Verify driver has access to these orders
     const verification = await orderDao.verifyDriverAccessToOrdersDAO(
       driverId,
-      processOrderIds
+      processOrderIds,
     );
 
     if (!verification.hasAccess) {
@@ -470,14 +392,14 @@ exports.saveSignature = asyncHandler(async (req, res) => {
     const signatureUrl = await uploadFileToS3(
       req.file.buffer,
       req.file.originalname,
-      "signatures"
+      "signatures",
     );
 
     // Save signature and update order statuses
     const result = await orderDao.saveSignatureAndUpdateStatusDAO(
       processOrderIds,
       signatureUrl,
-      driverId
+      driverId,
     );
 
     res.status(200).json({
@@ -501,14 +423,13 @@ exports.saveSignature = asyncHandler(async (req, res) => {
 });
 
 //Re start Journey
-
 exports.ReStartJourney = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
     const response = {
       status: "error",
       message: "Unauthorized: User authentication required",
     };
-    console.log("StartJourney Response:", response);
+
     return res.status(401).json(response);
   }
 
@@ -522,7 +443,7 @@ exports.ReStartJourney = asyncHandler(async (req, res) => {
         status: "error",
         message: "orderIds parameter is required",
       };
-      console.log("StartJourney Response:", response);
+
       return res.status(400).json(response);
     }
 
@@ -544,16 +465,9 @@ exports.ReStartJourney = asyncHandler(async (req, res) => {
         status: "error",
         message: "Valid order IDs are required",
       };
-      console.log("StartJourney Response:", response);
+
       return res.status(400).json(response);
     }
-
-    console.log(
-      "Starting journey for driver:",
-      driverId,
-      "with order IDs:",
-      orderIdArray
-    );
 
     // Start the journey
     const result = await orderDao.reStartJourneyDAO(driverId, orderIdArray);
@@ -566,16 +480,15 @@ exports.ReStartJourney = asyncHandler(async (req, res) => {
           updatedOrders: result.updatedOrders,
         },
       };
-      console.log("StartJourney Response:", response);
+
       return res.status(200).json(response);
     } else {
-      // IMPORTANT: Include ongoingProcessOrderIds in the error response
       const response = {
         status: "error",
         message: result.message,
         ongoingProcessOrderIds: result.ongoingProcessOrderIds || [],
       };
-      console.log("StartJourney Response:", response);
+
       return res.status(400).json(response);
     }
   } catch (error) {
@@ -584,7 +497,7 @@ exports.ReStartJourney = asyncHandler(async (req, res) => {
       status: "error",
       message: "Failed to start journey",
     };
-    console.log("StartJourney Response:", response);
+
     return res.status(500).json(response);
   }
 });
