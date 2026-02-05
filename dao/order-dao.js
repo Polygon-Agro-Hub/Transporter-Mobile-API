@@ -1092,7 +1092,7 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
     // Step 2: Check if any orders are already in ongoing process
     const ongoingOrders = driverOrders.filter(
       (order) =>
-        order.drvStatus === "On the Way" || order.drvStatus === "Arrived",
+        order.drvStatus === "On the way" || order.drvStatus === "Arrived",
     );
 
     if (ongoingOrders.length > 0) {
@@ -1103,10 +1103,10 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
       };
     }
 
-    // Step 3: Update driverorders table - set drvStatus to "On the Way"
+    // Step 3: Update driverorders table - set drvStatus to "On the way"
     await db.collectionofficer.promise().query(
       `UPDATE driverorders 
-       SET drvStatus = 'On the Way'
+       SET drvStatus = 'On the way'
        WHERE id IN (?)`,
       [driverOrderIds],
     );
@@ -1126,11 +1126,11 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
       [driverOrderIds],
     );
 
-    // Step 5: Update processorders table status to "On the Way"
+    // Step 5: Update processorders table status to "On the way"
 
     await db.marketPlace.promise().query(
       `UPDATE processorders 
-       SET status = 'On the Way'
+       SET status = 'On the way'
        WHERE id IN (?)`,
       [validOrderIds],
     );
@@ -1141,7 +1141,7 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
       updatedOrders: driverOrders.map((order) => ({
         orderId: order.orderId,
         driverOrderId: order.id,
-        drvStatus: "On the Way",
+        drvStatus: "On the way",
       })),
     };
   } catch (error) {
