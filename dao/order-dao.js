@@ -708,7 +708,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
         if (checkErr) {
           console.error(
             "Database error checking ongoing orders:",
-            checkErr.message,
+            checkErr.message
           );
           return reject(new Error("Failed to check ongoing orders"));
         }
@@ -717,7 +717,6 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
         const ongoingOrderIds = checkResults[0]?.ongoingOrderIds || "";
 
         if (ongoingCount > 0) {
-          // Split the ongoingOrderIds string into an array
           const ongoingIdsArray = ongoingOrderIds
             .split(",")
             .map((id) => parseInt(id.trim()))
@@ -727,7 +726,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
             success: false,
             message:
               "You have one ongoing activity. Please end it, put it on hold, or mark it as returned to start this one.",
-            ongoingProcessOrderIds: ongoingIdsArray, // Return the ongoing order IDs
+            ongoingProcessOrderIds: ongoingIdsArray,
           });
         }
 
@@ -751,7 +750,6 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
               return reject(new Error("Failed to update driver orders"));
             }
 
-            // Check if any rows were updated
             if (result1.affectedRows === 0) {
               return resolve({
                 success: false,
@@ -775,60 +773,86 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                   return reject(new Error("Failed to update process orders"));
                 }
 
-                // Fetch updated records
-                const getUpdatedOrdersSql = `
-                  SELECT 
-                    do.id AS driverOrderId,
-                    do.orderId AS processOrderId,
-                    po.orderId AS marketOrderId,
-                    po.invNo,
-                    po.status AS processStatus,
-                    do.drvStatus,
-                    do.startTime AS journeyStartedAt
-                  FROM collection_officer.driverorders do
-                  INNER JOIN market_place.processorders po 
-                    ON do.orderId = po.id
-                  WHERE do.driverId = ?
-                  AND do.orderId IN (?)
-                  AND do.drvStatus = 'On the way'
+                const insertNotificationSql = `
+                  INSERT INTO market_place.dashnotification (orderId, title, readStatus, createdAt)
+                  VALUES ?
                 `;
 
+                const notificationValues = orderIds.map((id) => [
+                  id,
+                  "Order is on the way",
+                  0,
+                  new Date(),
+                ]);
+
                 db.collectionofficer.query(
-                  getUpdatedOrdersSql,
-                  [driverId, orderIds],
-                  (err3, updatedResults) => {
-                    if (err3) {
+                  insertNotificationSql,
+                  [notificationValues],
+                  (errN, resultN) => {
+                    if (errN) {
                       console.error(
-                        "Error fetching updated orders:",
-                        err3.message,
+                        "Error inserting dashnotification:",
+                        errN.message
                       );
-                      return resolve({
-                        success: true,
-                        message: "Journey started successfully",
-                        updatedOrders: [],
-                      });
+                      // Non-blocking: log error but continue
                     }
 
-                    resolve({
-                      success: true,
-                      message: "Journey started successfully",
-                      updatedOrders: updatedResults.map((row) => ({
-                        driverOrderId: row.driverOrderId,
-                        processOrderId: row.processOrderId,
-                        marketOrderId: row.marketOrderId,
-                        invNo: row.invNo,
-                        processStatus: row.processStatus,
-                        drvStatus: row.drvStatus,
-                        journeyStartedAt: row.journeyStartedAt,
-                      })),
-                    });
-                  },
+                    // Fetch updated records
+                    const getUpdatedOrdersSql = `
+                      SELECT 
+                        do.id AS driverOrderId,
+                        do.orderId AS processOrderId,
+                        po.orderId AS marketOrderId,
+                        po.invNo,
+                        po.status AS processStatus,
+                        do.drvStatus,
+                        do.startTime AS journeyStartedAt
+                      FROM collection_officer.driverorders do
+                      INNER JOIN market_place.processorders po 
+                        ON do.orderId = po.id
+                      WHERE do.driverId = ?
+                      AND do.orderId IN (?)
+                      AND do.drvStatus = 'On the way'
+                    `;
+
+                    db.collectionofficer.query(
+                      getUpdatedOrdersSql,
+                      [driverId, orderIds],
+                      (err3, updatedResults) => {
+                        if (err3) {
+                          console.error(
+                            "Error fetching updated orders:",
+                            err3.message
+                          );
+                          return resolve({
+                            success: true,
+                            message: "Journey started successfully",
+                            updatedOrders: [],
+                          });
+                        }
+
+                        resolve({
+                          success: true,
+                          message: "Journey started successfully",
+                          updatedOrders: updatedResults.map((row) => ({
+                            driverOrderId: row.driverOrderId,
+                            processOrderId: row.processOrderId,
+                            marketOrderId: row.marketOrderId,
+                            invNo: row.invNo,
+                            processStatus: row.processStatus,
+                            drvStatus: row.drvStatus,
+                            journeyStartedAt: row.journeyStartedAt,
+                          })),
+                        });
+                      }
+                    );
+                  }
                 );
-              },
+              }
             );
-          },
+          }
         );
-      },
+      }
     );
   });
 };
@@ -892,7 +916,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               (order) => order.processOrderId,
             );
 
-            // 1. Update driverorders (NO completeTime here)
+            // 1. Update driverorders
             const updateDriverOrdersQuery = `
               UPDATE collection_officer.driverorders 
               SET 
@@ -941,7 +965,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   }),
                 );
 
-                // 3. Cash orders handling (UNCHANGED)
+                // 3. Cash orders handling
                 if (cashOrderIds.length > 0) {
                   const updateCashOrdersQuery = `
                     UPDATE market_place.processorders po
@@ -984,34 +1008,62 @@ exports.saveSignatureAndUpdateStatusDAO = async (
 
                       connection.release();
 
-                      const statusUpdateResult = results.find(
-                        (r) => r.type === "status",
-                      )?.result;
+                      const insertNotificationSql = `
+                        INSERT INTO market_place.dashnotification (orderId, title, readStatus, createdAt)
+                        VALUES ?
+                      `;
 
-                      const cashUpdateResult = results.find(
-                        (r) => r.type === "cash",
-                      )?.result;
+                      const notificationValues = processOrderIds.map((id) => [
+                        id,
+                        "Order is Delivered",
+                        0,
+                        new Date(),
+                      ]);
 
-                      console.log("Signature update successful:", {
-                        driverOrdersUpdated: result1.affectedRows,
-                        processOrdersUpdated:
-                          statusUpdateResult?.affectedRows || 0,
-                        cashOrdersUpdated: cashUpdateResult?.affectedRows || 0,
-                        totalOrders: processOrderIds.length,
-                        cashOrdersCount: cashOrderIds.length,
-                        nonCashOrdersCount: nonCashOrderIds.length,
-                      });
+                      db.collectionofficer.query(
+                        insertNotificationSql,
+                        [notificationValues],
+                        (errN) => {
+                          if (errN) {
+                            console.error(
+                              "Error inserting dashnotification:",
+                              errN.message,
+                            );
 
-                      resolve({
-                        driverOrdersUpdated: result1.affectedRows,
-                        processOrdersUpdated:
-                          statusUpdateResult?.affectedRows || 0,
-                        cashOrdersUpdated: cashUpdateResult?.affectedRows || 0,
-                        signatureUrl: signaturePath,
-                        totalOrders: processOrderIds.length,
-                        cashOrdersCount: cashOrderIds.length,
-                        nonCashOrdersCount: nonCashOrderIds.length,
-                      });
+                          }
+
+                          const statusUpdateResult = results.find(
+                            (r) => r.type === "status",
+                          )?.result;
+
+                          const cashUpdateResult = results.find(
+                            (r) => r.type === "cash",
+                          )?.result;
+
+                          console.log("Signature update successful:", {
+                            driverOrdersUpdated: result1.affectedRows,
+                            processOrdersUpdated:
+                              statusUpdateResult?.affectedRows || 0,
+                            cashOrdersUpdated:
+                              cashUpdateResult?.affectedRows || 0,
+                            totalOrders: processOrderIds.length,
+                            cashOrdersCount: cashOrderIds.length,
+                            nonCashOrdersCount: nonCashOrderIds.length,
+                          });
+
+                          resolve({
+                            driverOrdersUpdated: result1.affectedRows,
+                            processOrdersUpdated:
+                              statusUpdateResult?.affectedRows || 0,
+                            cashOrdersUpdated:
+                              cashUpdateResult?.affectedRows || 0,
+                            signatureUrl: signaturePath,
+                            totalOrders: processOrderIds.length,
+                            cashOrdersCount: cashOrderIds.length,
+                            nonCashOrdersCount: nonCashOrderIds.length,
+                          });
+                        },
+                      );
                     });
                   })
                   .catch((promiseErr) => {
