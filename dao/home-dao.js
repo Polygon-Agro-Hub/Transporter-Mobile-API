@@ -319,7 +319,7 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
 exports.getOfficerByEmpId = async (empId) => {
   return new Promise((resolve, reject) => {
     const sql = `
-            SELECT id, empId, firstNameEnglish, lastNameEnglish
+            SELECT id, empId, firstNameEnglish, lastNameEnglish,status
             FROM collection_officer.collectionofficer
             WHERE empId = ? 
             LIMIT 1
