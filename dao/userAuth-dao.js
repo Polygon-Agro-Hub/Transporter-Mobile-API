@@ -114,6 +114,7 @@ exports.getUserProfile = async (empId) => {
         co.nic,
         co.email,
         co.image,
+        co.passwordUpdated,
         co.createdAt,
         vr.vType,
         vr.vRegNo
@@ -141,6 +142,7 @@ exports.getUserProfile = async (empId) => {
       nic: user.nic || "",
       email: user.email || "",
       image: user.image || "",
+      passwordUpdated: user.passwordUpdated ?? 0,
       createdAt: user.createdAt || "",
       vType: user.vType || null,
       vRegNo: user.vRegNo || null,

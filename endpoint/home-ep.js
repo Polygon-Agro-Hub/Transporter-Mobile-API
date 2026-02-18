@@ -96,6 +96,12 @@ exports.handOverCash = asyncHandler(async (req, res) => {
       });
     }
 
+    if (officer.status === "Not Approved" || officer.status === "Rejected") {
+      return res.status(403).json({
+        status: "error",
+        message: `This Distribution Centre Manager is not in an approved status. Cash handover is not permitted.`,
+      });
+    }
     const officerId = officer.id;
 
     const orderDetails = await homeDao.getOrderAmounts(orderIds);
