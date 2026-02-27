@@ -315,15 +315,38 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
   });
 };
 
+// Get driver's distributed center
+exports.getDriverDistributedCenter = async (driverId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT id, distributedCenterId
+      FROM collection_officer.collectionofficer
+      WHERE id = ?
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql, [driverId], (err, results) => {
+      if (err) {
+        console.error(
+          "Database error getting driver distributed center:",
+          err.message,
+        );
+        return reject(new Error("Failed to retrieve driver centre"));
+      }
+
+      resolve(results.length > 0 ? results[0] : null);
+    });
+  });
+};
+
 // Get officer by empId
 exports.getOfficerByEmpId = async (empId) => {
   return new Promise((resolve, reject) => {
     const sql = `
-            SELECT id, empId, firstNameEnglish, lastNameEnglish,status
-            FROM collection_officer.collectionofficer
-            WHERE empId = ? 
-            LIMIT 1
-        `;
+      SELECT id, empId, firstNameEnglish, lastNameEnglish, status, distributedCenterId
+      FROM collection_officer.collectionofficer
+      WHERE empId = ? 
+      LIMIT 1
+    `;
     db.collectionofficer.query(sql, [empId], (err, results) => {
       if (err) {
         console.error("Database error getting officer by empId:", err.message);
