@@ -5,7 +5,7 @@ const holdEp = require('../endpoint/hold-ep');
 
 /**
  * @openapi
- * /transporter/api/hold/reason:
+ * /api/hold/reason:
  *   get:
  *     tags:
  *       - Hold
@@ -19,7 +19,7 @@ router.get('/reason', auth, holdEp.getReason);
 
 /**
  * @openapi
- * /transporter/api/hold/submit:
+ * /api/hold/submit:
  *   post:
  *     tags:
  *       - Hold

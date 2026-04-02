@@ -6,7 +6,7 @@ const { upload } = require('../middlewares/multer.middleware');
 
 /**
  * @openapi
- * /transporter/api/order/assign-driver-order:
+ * /api/order/assign-driver-order:
  *   post:
  *     tags:
  *       - Order
@@ -29,7 +29,7 @@ router.post('/assign-driver-order', auth, orderEp.assignDriverOrder);
 
 /**
  * @openapi
- * /transporter/api/order/get-driver-orders:
+ * /api/order/get-driver-orders:
  *   get:
  *     tags:
  *       - Order
@@ -43,7 +43,7 @@ router.get('/get-driver-orders', auth, orderEp.GetDriverOrders);
 
 /**
  * @openapi
- * /transporter/api/order/get-order-user-details:
+ * /api/order/get-order-user-details:
  *   get:
  *     tags:
  *       - Order
@@ -63,7 +63,7 @@ router.get('/get-order-user-details', auth, orderEp.GetOrderUserDetails);
 
 /**
  * @openapi
- * /transporter/api/order/start-journey:
+ * /api/order/start-journey:
  *   post:
  *     tags:
  *       - Order
@@ -86,7 +86,7 @@ router.post('/start-journey', auth, orderEp.StartJourney);
 
 /**
  * @openapi
- * /transporter/api/order/save-signature:
+ * /api/order/save-signature:
  *   post:
  *     tags:
  *       - Order
@@ -118,7 +118,7 @@ router.post('/save-signature',
 
 /**
  * @openapi
- * /transporter/api/order/re-start-journey:
+ * /api/order/re-start-journey:
  *   post:
  *     tags:
  *       - Order

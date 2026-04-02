@@ -6,7 +6,7 @@ const { upload } = require('../middlewares/multer.middleware');
 
 /**
  * @openapi
- * /transporter/api/auth/login:
+ * /api/auth/login:
  *   post:
  *     tags:
  *       - Auth
@@ -36,7 +36,7 @@ router.post('/login', userAuthEp.login);
 
 /**
  * @openapi
- * /transporter/api/auth/change-password:
+ * /api/auth/change-password:
  *   post:
  *     tags:
  *       - Auth
@@ -61,7 +61,7 @@ router.post('/change-password', auth, userAuthEp.changePassword)
 
 /**
  * @openapi
- * /transporter/api/auth/get-profile:
+ * /api/auth/get-profile:
  *   get:
  *     tags:
  *       - Auth
@@ -75,7 +75,7 @@ router.get('/get-profile', auth, userAuthEp.getProfile);
 
 /**
  * @openapi
- * /transporter/api/auth/update-profile-image:
+ * /api/auth/update-profile-image:
  *   post:
  *     tags:
  *       - Auth
