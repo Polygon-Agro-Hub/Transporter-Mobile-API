@@ -51,12 +51,18 @@ const setupSwagger = (app, basePath) => {
     next();
   });
 
-  // prevents JS loading error
+  // prevents JS loading error on Vercel
   app.use(
     swaggerPath,
     swaggerUi.serveFiles(swaggerSpec),
     swaggerUi.setup(swaggerSpec, {
       explorer: true,
+      customCssUrl:
+        "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.3.0/swagger-ui.min.css",
+      customJs: [
+        "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.3.0/swagger-ui-bundle.js",
+        "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.3.0/swagger-ui-standalone-preset.js",
+      ],
     })
   );
 };
