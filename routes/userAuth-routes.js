@@ -20,15 +20,27 @@ const { upload } = require('../middlewares/multer.middleware');
  *           schema:
  *             type: object
  *             properties:
- *               email:
- *                 type: string
- *               phoneNumber:
+ *               empId:
  *                 type: string
  *               password:
  *                 type: string
  *     responses:
  *       200:
- *         description: Successfully logged in
+ *         description: Successfully logged in, token returned in data.token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     token:
+ *                       type: string
  *       400:
  *         description: Bad Request
  */
@@ -42,6 +54,8 @@ router.post('/login', userAuthEp.login);
  *       - Auth
  *     summary: Change Password
  *     description: Update the currently logged in user's password
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -49,7 +63,7 @@ router.post('/login', userAuthEp.login);
  *           schema:
  *             type: object
  *             properties:
- *               oldPassword:
+ *               currentPassword:
  *                 type: string
  *               newPassword:
  *                 type: string
@@ -67,6 +81,8 @@ router.post('/change-password', auth, userAuthEp.changePassword)
  *       - Auth
  *     summary: Get Profile
  *     description: Retrieve the currently logged in user's profile
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Profile retrieved successfully
@@ -81,6 +97,8 @@ router.get('/get-profile', auth, userAuthEp.getProfile);
  *       - Auth
  *     summary: Update Profile Image
  *     description: Upload a new profile image (multipart/form-data)
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:

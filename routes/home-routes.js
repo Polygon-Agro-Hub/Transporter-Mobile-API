@@ -11,6 +11,8 @@ const homeEp = require('../endpoint/home-ep');
  *       - Home
  *     summary: Get Amount
  *     description: Retrieve the collected amounts
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Amount retrieved
@@ -25,6 +27,8 @@ router.get('/get-amount', auth, homeEp.getAmount);
  *       - Home
  *     summary: Get Received Cash
  *     description: Retrieve total received cash breakdown
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Cash breakdown retrieved
@@ -39,6 +43,8 @@ router.get('/get-received-cash', auth, homeEp.getReceivedCash);
  *       - Home
  *     summary: Hand Over Cash
  *     description: Hand over collected cash to the hub
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -46,9 +52,13 @@ router.get('/get-received-cash', auth, homeEp.getReceivedCash);
  *           schema:
  *             type: object
  *             properties:
- *               amount:
+ *               orderIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *               totalAmount:
  *                 type: number
- *               hubId:
+ *               officerId:
  *                 type: string
  *     responses:
  *       200:

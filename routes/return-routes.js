@@ -11,6 +11,8 @@ const returnEp = require('../endpoint/return-ep');
  *       - Return
  *     summary: Get Return Reason
  *     description: Retrieve reasons for returning an order
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Reasons retrieved successfully
@@ -25,6 +27,8 @@ router.get('/reason', auth, returnEp.getReason);
  *       - Return
  *     summary: Submit Return Order
  *     description: Submit a return request for an order
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -32,11 +36,13 @@ router.get('/reason', auth, returnEp.getReason);
  *           schema:
  *             type: object
  *             properties:
- *               orderId:
- *                 type: string
- *               reasonId:
- *                 type: string
- *               description:
+ *               orderIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *               returnReasonId:
+ *                 type: integer
+ *               note:
  *                 type: string
  *     responses:
  *       200:
@@ -52,6 +58,8 @@ router.post('/submit', auth, returnEp.submitReturn);
  *       - Return
  *     summary: Get Driver's Return Orders
  *     description: Retrieve all returned orders assigned to the driver
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Return orders retrieved
@@ -66,6 +74,8 @@ router.get('/get-driver-return-orders', auth, returnEp.GetDriverReturnOrders);
  *       - Return
  *     summary: Update Return to Received
  *     description: Mark a return order as received
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -73,8 +83,10 @@ router.get('/get-driver-return-orders', auth, returnEp.GetDriverReturnOrders);
  *           schema:
  *             type: object
  *             properties:
- *               orderId:
- *                 type: string
+ *               invoiceNumbers:
+ *                 type: array
+ *                 items:
+ *                   type: string
  *     responses:
  *       200:
  *         description: Status updated
