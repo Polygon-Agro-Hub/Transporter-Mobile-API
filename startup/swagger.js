@@ -13,10 +13,14 @@ const options = {
     servers: [
       {
         url: "http://localhost:3000/transporter",
-        description: "Development Server",
+        description: "Local Server",
       },
       {
         url: "https://transporter-mobile-api.vercel.app/transporter",
+        description: "Development Server",
+      },
+      {
+        url: "https://transporter-mobile-api-prod.vercel.app/transporter",
         description: "Production Server",
       },
     ],
