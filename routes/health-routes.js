@@ -11,7 +11,7 @@ router.use((req, res, next) => {
 
 /**
  * @openapi
- * /transporter/health:
+ * /health:
  *   get:
  *     tags:
  *       - Health
@@ -30,7 +30,7 @@ router.get("/health", (req, res) => {
     uptime: formatUptime(process.uptime()),
     environment: process.env.NODE_ENV || "development",
     version: process.env.npm_package_version || "1.0.0",
-    service: "PlantCare API",
+    service: "Govi-Transport API",
   };
 
   res.status(200).json(healthData);
@@ -38,7 +38,7 @@ router.get("/health", (req, res) => {
 
 /**
  * @openapi
- * /transporter/health/detailed:
+ * /health/detailed:
  *   get:
  *     tags:
  *       - Health
@@ -59,7 +59,7 @@ router.get("/health/detailed", (req, res) => {
 
     // Application information
     application: {
-      name: "PlantCare API",
+      name: "Govi-Transport API",
       version: process.env.npm_package_version || "1.0.0",
       nodeVersion: process.version,
       memoryUsage: formatMemoryUsage(process.memoryUsage()),
@@ -93,7 +93,7 @@ router.get("/health/detailed", (req, res) => {
 
 /**
  * @openapi
- * /transporter/health/live:
+ * /health/live:
  *   get:
  *     tags:
  *       - Health
@@ -113,7 +113,7 @@ router.get("/health/live", (req, res) => {
 
 /**
  * @openapi
- * /transporter/health/ready:
+ * /health/ready:
  *   get:
  *     tags:
  *       - Health
@@ -145,7 +145,7 @@ router.get("/health/ready", (req, res) => {
 
 /**
  * @openapi
- * /transporter/home:
+ * /home:
  *   get:
  *     tags:
  *       - Health
@@ -158,11 +158,10 @@ router.get("/health/ready", (req, res) => {
  */
 router.get("/home", (req, res) => {
   const welcomeMessage = {
-    message: "Welcome to PlantCare API",
+    message: "Welcome to Govi-Transport API",
     description: "Your comprehensive agricultural management system",
     version: process.env.npm_package_version || "1.0.0",
     documentation: "/api-docs",
-    support: "support@plantcare.com",
     endpoints: {
       health: {
         basic: "GET /health - Basic health check",

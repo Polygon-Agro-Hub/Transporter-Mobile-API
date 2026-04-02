@@ -7,15 +7,20 @@ const options = {
     info: {
       title: "Transporter Mobile API",
       version: "1.0.0",
-      description: "API documentation for the Polygon Agro Hub Transporter Mobile app.",
+      description:
+        "API documentation for the Polygon Agro Hub Transporter Mobile app.",
     },
     servers: [
       {
-        url: "http://localhost:3000",
+        url: "http://localhost:3000/transporter",
+        description: "Local Server",
+      },
+      {
+        url: "https://transporter-mobile-api.vercel.app/transporter",
         description: "Development Server",
       },
       {
-        url: "https://your-production-url.com", // Replace with actual production URL if applicable
+        url: "https://transporter-mobile-api-prod.vercel.app/transporter",
         description: "Production Server",
       },
     ],
@@ -34,15 +39,15 @@ const options = {
       },
     ],
   },
-  apis: ["./routes/*.js", "./server.js"], // Files containing annotations
+  apis: ["./routes/*.js", "./server.js"],
 };
 
 const swaggerSpec = swaggerJsdoc(options);
 
 const setupSwagger = (app, basePath) => {
   const swaggerPath = `${basePath}/api-docs`;
-  
-  // Enforce trailing slash so relative JS/CSS requests resolve correctly
+
+  // Fix trailing slash issue
   app.use(swaggerPath, (req, res, next) => {
     if (req.originalUrl === swaggerPath) {
       return res.redirect(`${swaggerPath}/`);
@@ -50,7 +55,20 @@ const setupSwagger = (app, basePath) => {
     next();
   });
 
-  app.use(swaggerPath, swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
+  // prevents JS loading error on Vercel
+  app.use(
+    swaggerPath,
+    swaggerUi.serveFiles(swaggerSpec),
+    swaggerUi.setup(swaggerSpec, {
+      explorer: true,
+      customCssUrl:
+        "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.3.0/swagger-ui.min.css",
+      customJs: [
+        "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.3.0/swagger-ui-bundle.js",
+        "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.3.0/swagger-ui-standalone-preset.js",
+      ],
+    })
+  );
 };
 
 module.exports = setupSwagger;

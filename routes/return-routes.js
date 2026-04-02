@@ -5,7 +5,7 @@ const returnEp = require('../endpoint/return-ep');
 
 /**
  * @openapi
- * /transporter/api/return/reason:
+ * /api/return/reason:
  *   get:
  *     tags:
  *       - Return
@@ -19,7 +19,7 @@ router.get('/reason', auth, returnEp.getReason);
 
 /**
  * @openapi
- * /transporter/api/return/submit:
+ * /api/return/submit:
  *   post:
  *     tags:
  *       - Return
@@ -46,7 +46,7 @@ router.post('/submit', auth, returnEp.submitReturn);
 
 /**
  * @openapi
- * /transporter/api/return/get-driver-return-orders:
+ * /api/return/get-driver-return-orders:
  *   get:
  *     tags:
  *       - Return
@@ -60,7 +60,7 @@ router.get('/get-driver-return-orders', auth, returnEp.GetDriverReturnOrders);
 
 /**
  * @openapi
- * /transporter/api/return/update-return-received:
+ * /api/return/update-return-received:
  *   post:
  *     tags:
  *       - Return

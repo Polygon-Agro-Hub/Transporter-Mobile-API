@@ -5,7 +5,7 @@ const homeEp = require('../endpoint/home-ep');
 
 /**
  * @openapi
- * /transporter/api/home/get-amount:
+ * /api/home/get-amount:
  *   get:
  *     tags:
  *       - Home
@@ -19,7 +19,7 @@ router.get('/get-amount', auth, homeEp.getAmount);
 
 /**
  * @openapi
- * /transporter/api/home/get-received-cash:
+ * /api/home/get-received-cash:
  *   get:
  *     tags:
  *       - Home
@@ -33,7 +33,7 @@ router.get('/get-received-cash', auth, homeEp.getReceivedCash);
 
 /**
  * @openapi
- * /transporter/api/home/hand-over-cash:
+ * /api/home/hand-over-cash:
  *   post:
  *     tags:
  *       - Home

@@ -5,7 +5,7 @@ const complainEp = require('../endpoint/complain-ep');
 
 /**
  * @openapi
- * /transporter/api/complain/add-complain:
+ * /api/complain/add-complain:
  *   post:
  *     tags:
  *       - Complain
@@ -32,7 +32,7 @@ router.post('/add-complain', auth, complainEp.AddComplain);
 
 /**
  * @openapi
- * /transporter/api/complain/complain-categories:
+ * /api/complain/complain-categories:
  *   get:
  *     tags:
  *       - Complain
@@ -46,7 +46,7 @@ router.get('/complain-categories', auth, complainEp.GetComplainCategories);
 
 /**
  * @openapi
- * /transporter/api/complain/my-complains:
+ * /api/complain/my-complains:
  *   get:
  *     tags:
  *       - Complain
