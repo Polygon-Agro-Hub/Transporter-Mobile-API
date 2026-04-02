@@ -12,6 +12,10 @@ const options = {
     },
     servers: [
       {
+        url: "/transporter",
+        description: "Current Server (Dynamic)",
+      },
+      {
         url: "http://localhost:3000/transporter",
         description: "Development Server",
       },
