@@ -11,7 +11,7 @@ router.use((req, res, next) => {
 
 /**
  * @openapi
- * /transporter/health:
+ * /health:
  *   get:
  *     tags:
  *       - Health
@@ -38,7 +38,7 @@ router.get("/health", (req, res) => {
 
 /**
  * @openapi
- * /transporter/health/detailed:
+ * /health/detailed:
  *   get:
  *     tags:
  *       - Health
@@ -93,7 +93,7 @@ router.get("/health/detailed", (req, res) => {
 
 /**
  * @openapi
- * /transporter/health/live:
+ * /health/live:
  *   get:
  *     tags:
  *       - Health
@@ -113,7 +113,7 @@ router.get("/health/live", (req, res) => {
 
 /**
  * @openapi
- * /transporter/health/ready:
+ * /health/ready:
  *   get:
  *     tags:
  *       - Health
@@ -145,7 +145,7 @@ router.get("/health/ready", (req, res) => {
 
 /**
  * @openapi
- * /transporter/home:
+ * /home:
  *   get:
  *     tags:
  *       - Health
