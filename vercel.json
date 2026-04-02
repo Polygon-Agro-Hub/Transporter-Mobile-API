@@ -2,6 +2,14 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/transporter/api-docs/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/transporter/api-docs",
+      "destination": "/api"
+    },
+    {
       "source": "/(.*)",
       "destination": "/api"
     }

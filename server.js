@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 require("dotenv").config();
+
 const {
   plantcare,
   collectionofficer,
@@ -9,32 +10,34 @@ const {
   admin,
 } = require("./startup/database");
 
+const setupSwagger = require("./startup/swagger");
+
 const app = express();
 
+// Base path
 const BASE_PATH = "/transporter";
 
-const corsOptions = {
-  origin: process.env.CLIENT_ORIGIN || "http://localhost:8081",
+// Middleware
+app.use(cors({
+  origin: process.env.CLIENT_ORIGIN || "*",
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true,
-};
+}));
 
-app.use(cors(corsOptions));
 app.use(bodyParser.json({ limit: "10mb" }));
-app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
+app.use(bodyParser.urlencoded({ extended: true }));
 
-
-
+// Database check
 const DatabaseConnection = (db, name) => {
   db.getConnection((err, connection) => {
     if (err) {
-      console.error(`Error getting connection from ${name}:`, err);
+      console.error(`❌ Error connecting to ${name}:`, err);
     } else {
       connection.ping((err) => {
         if (err) {
-          console.error(`Error pinging ${name} database:`, err);
+          console.error(`❌ Error pinging ${name}:`, err);
         } else {
-          console.log(`Ping to ${name} database successful.`);
+          console.log(`✅ ${name} DB connected`);
         }
         connection.release();
       });
@@ -42,44 +45,40 @@ const DatabaseConnection = (db, name) => {
   });
 };
 
-// Initial database connections
+// Initial DB connections
 DatabaseConnection(plantcare, "PlantCare");
 DatabaseConnection(collectionofficer, "CollectionOfficer");
 DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
-const userroute = require("./routes/userAuth-routes");
-const complainroute = require("./routes/complain-routes");
-const orderroute = require("./routes/order-routes");
-const returnrote = require("./routes/return-routes");
-const holdroute = require("./routes/hold-routes");
-const homeroute = require("./routes/home-routes");
-const healthroute = require("./routes/health-routes");
-const setupSwagger = require("./startup/swagger");
-
-// Setup Swagger UI
+// Swagger (VERY IMPORTANT: before routes)
 setupSwagger(app, BASE_PATH);
 
+// Routes
+app.use(`${BASE_PATH}/api/auth`, require("./routes/userAuth-routes"));
+app.use(`${BASE_PATH}/api/complain`, require("./routes/complain-routes"));
+app.use(`${BASE_PATH}/api/order`, require("./routes/order-routes"));
+app.use(`${BASE_PATH}/api/return`, require("./routes/return-routes"));
+app.use(`${BASE_PATH}/api/hold`, require("./routes/hold-routes"));
+app.use(`${BASE_PATH}/api/home`, require("./routes/home-routes"));
+app.use(`${BASE_PATH}`, require("./routes/health-routes"));
 
-app.use(`${BASE_PATH}/api/auth`, userroute);
-app.use(`${BASE_PATH}/api/complain`, complainroute);
-app.use(`${BASE_PATH}/api/order`, orderroute);
-app.use(`${BASE_PATH}/api/return`, returnrote);
-app.use(`${BASE_PATH}/api/hold`, holdroute);
-app.use(`${BASE_PATH}/api/home`, homeroute);
-app.use(`${BASE_PATH}`, healthroute);
-
+// Error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send("Something broke!");
-});
-// Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`📍 Base Path: ${BASE_PATH}`);
-  console.log(`💓 Health Check URL: ${BASE_PATH}/health`);
+  console.error("🔥 Server Error:", err);
+  res.status(500).json({ message: "Something went wrong" });
 });
 
+// Start server (for local)
+const PORT = process.env.PORT || 3000;
+
+if (process.env.NODE_ENV !== "production") {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📍 Base Path: ${BASE_PATH}`);
+    console.log(`📄 Swagger: http://localhost:${PORT}${BASE_PATH}/api-docs/`);
+  });
+}
+
+// Export for Vercel
 module.exports = app;

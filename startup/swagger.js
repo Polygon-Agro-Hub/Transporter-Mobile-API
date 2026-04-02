@@ -7,15 +7,16 @@ const options = {
     info: {
       title: "Transporter Mobile API",
       version: "1.0.0",
-      description: "API documentation for the Polygon Agro Hub Transporter Mobile app.",
+      description:
+        "API documentation for the Polygon Agro Hub Transporter Mobile app.",
     },
     servers: [
       {
-        url: "http://localhost:3000",
+        url: "http://localhost:3000/transporter",
         description: "Development Server",
       },
       {
-        url: "https://transporter-mobile-api.vercel.app/transporter", 
+        url: "https://transporter-mobile-api.vercel.app/transporter",
         description: "Production Server",
       },
     ],
@@ -34,15 +35,15 @@ const options = {
       },
     ],
   },
-  apis: ["./routes/*.js", "./server.js"], // Files containing annotations
+  apis: ["./routes/*.js", "./server.js"],
 };
 
 const swaggerSpec = swaggerJsdoc(options);
 
 const setupSwagger = (app, basePath) => {
   const swaggerPath = `${basePath}/api-docs`;
-  
-  // Enforce trailing slash so relative JS/CSS requests resolve correctly
+
+  // Fix trailing slash issue
   app.use(swaggerPath, (req, res, next) => {
     if (req.originalUrl === swaggerPath) {
       return res.redirect(`${swaggerPath}/`);
@@ -50,7 +51,14 @@ const setupSwagger = (app, basePath) => {
     next();
   });
 
-  app.use(swaggerPath, swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
+  // prevents JS loading error
+  app.use(
+    swaggerPath,
+    swaggerUi.serveFiles(swaggerSpec),
+    swaggerUi.setup(swaggerSpec, {
+      explorer: true,
+    })
+  );
 };
 
 module.exports = setupSwagger;
