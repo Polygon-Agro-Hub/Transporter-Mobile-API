@@ -40,7 +40,17 @@ const options = {
 const swaggerSpec = swaggerJsdoc(options);
 
 const setupSwagger = (app, basePath) => {
-  app.use(`${basePath}/api-docs`, swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
+  const swaggerPath = `${basePath}/api-docs`;
+  
+  // Enforce trailing slash so relative JS/CSS requests resolve correctly
+  app.use(swaggerPath, (req, res, next) => {
+    if (req.originalUrl === swaggerPath) {
+      return res.redirect(`${swaggerPath}/`);
+    }
+    next();
+  });
+
+  app.use(swaggerPath, swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
 };
 
 module.exports = setupSwagger;
