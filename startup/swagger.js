@@ -15,7 +15,7 @@ const options = {
         description: "Development Server",
       },
       {
-        url: "https://your-production-url.com", // Replace with actual production URL if applicable
+        url: "https://transporter-mobile-api.vercel.app/transporter", 
         description: "Production Server",
       },
     ],
