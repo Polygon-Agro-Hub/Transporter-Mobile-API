@@ -23,15 +23,7 @@ app.use(cors(corsOptions));
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
 
-app.get([`${BASE_PATH}/health`, `${BASE_PATH}/healthz`], (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    timestamp: new Date(),
-    uptime: process.uptime(),
-    service: "Transporter API",
-    environment: process.env.NODE_ENV || "development",
-  });
-});
+
 
 const DatabaseConnection = (db, name) => {
   db.getConnection((err, connection) => {
@@ -62,6 +54,12 @@ const orderroute = require("./routes/order-routes");
 const returnrote = require("./routes/return-routes");
 const holdroute = require("./routes/hold-routes");
 const homeroute = require("./routes/home-routes");
+const healthroute = require("./routes/health-routes");
+const setupSwagger = require("./startup/swagger");
+
+// Setup Swagger UI
+setupSwagger(app, BASE_PATH);
+
 
 app.use(`${BASE_PATH}/api/auth`, userroute);
 app.use(`${BASE_PATH}/api/complain`, complainroute);
@@ -69,6 +67,7 @@ app.use(`${BASE_PATH}/api/order`, orderroute);
 app.use(`${BASE_PATH}/api/return`, returnrote);
 app.use(`${BASE_PATH}/api/hold`, holdroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
+app.use(`${BASE_PATH}`, healthroute);
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
