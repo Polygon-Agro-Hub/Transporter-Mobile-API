@@ -11,6 +11,8 @@ const complainEp = require('../endpoint/complain-ep');
  *       - Complain
  *     summary: Add Complain
  *     description: Submit a new complain against an order or general service
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -18,11 +20,9 @@ const complainEp = require('../endpoint/complain-ep');
  *           schema:
  *             type: object
  *             properties:
- *               complainCategoryId:
+ *               complainCategory:
  *                 type: string
- *               description:
- *                 type: string
- *               orderId:
+ *               complain:
  *                 type: string
  *     responses:
  *       200:
@@ -38,6 +38,8 @@ router.post('/add-complain', auth, complainEp.AddComplain);
  *       - Complain
  *     summary: Get Complain Categories
  *     description: Retrieve all available complain categories
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Complain categories retrieved successfully
@@ -52,6 +54,8 @@ router.get('/complain-categories', auth, complainEp.GetComplainCategories);
  *       - Complain
  *     summary: Get My Complains
  *     description: Retrieves the list of complains made by the auth user
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Complains list

@@ -12,6 +12,8 @@ const { upload } = require('../middlewares/multer.middleware');
  *       - Order
  *     summary: Assign Driver Order
  *     description: Assign an order to the currently authenticated driver
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -19,7 +21,7 @@ const { upload } = require('../middlewares/multer.middleware');
  *           schema:
  *             type: object
  *             properties:
- *               orderId:
+ *               invNo:
  *                 type: string
  *     responses:
  *       200:
@@ -35,6 +37,21 @@ router.post('/assign-driver-order', auth, orderEp.assignDriverOrder);
  *       - Order
  *     summary: Get Driver's Orders
  *     description: Retrieve orders assigned to the logged in driver
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: isHandOver
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: date
+ *         schema:
+ *           type: string
  *     responses:
  *       200:
  *         description: Orders retrieved successfully
@@ -49,12 +66,15 @@ router.get('/get-driver-orders', auth, orderEp.GetDriverOrders);
  *       - Order
  *     summary: Get Order User Details
  *     description: Retrieve details about the user associated with an order
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
- *         name: orderId
+ *         name: orderIds
  *         required: true
  *         schema:
  *           type: string
+ *           description: Comma-separated list of order IDs
  *     responses:
  *       200:
  *         description: User details retrieved
@@ -69,6 +89,8 @@ router.get('/get-order-user-details', auth, orderEp.GetOrderUserDetails);
  *       - Order
  *     summary: Start Journey
  *     description: Start journey for a specific order delivery
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -76,8 +98,10 @@ router.get('/get-order-user-details', auth, orderEp.GetOrderUserDetails);
  *           schema:
  *             type: object
  *             properties:
- *               orderId:
- *                 type: string
+ *               orderIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
  *     responses:
  *       200:
  *         description: Journey started
@@ -92,6 +116,8 @@ router.post('/start-journey', auth, orderEp.StartJourney);
  *       - Order
  *     summary: Save Signature
  *     description: Upload delivery completion signature
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -99,13 +125,13 @@ router.post('/start-journey', auth, orderEp.StartJourney);
  *           schema:
  *             type: object
  *             properties:
- *               orderId:
- *                 type: string
+ *               processOrderIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
  *               signature:
  *                 type: string
  *                 format: binary
- *               userRole:
- *                 type: string
  *     responses:
  *       200:
  *         description: Signature saved successfully
@@ -124,6 +150,8 @@ router.post('/save-signature',
  *       - Order
  *     summary: Restart Journey
  *     description: Re-Start journey for a specific order
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -131,8 +159,10 @@ router.post('/save-signature',
  *           schema:
  *             type: object
  *             properties:
- *               orderId:
- *                 type: string
+ *               orderIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
  *     responses:
  *       200:
  *         description: Journey re-started

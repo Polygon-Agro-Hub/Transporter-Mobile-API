@@ -11,6 +11,8 @@ const holdEp = require('../endpoint/hold-ep');
  *       - Hold
  *     summary: Get Hold Reason
  *     description: Retrieve valid reasons for placing an order on hold
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Reasons retrieved successfully
@@ -25,6 +27,8 @@ router.get('/reason', auth, holdEp.getReason);
  *       - Hold
  *     summary: Submit Hold Order
  *     description: Place an assigned order on hold with a specific reason
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -32,11 +36,13 @@ router.get('/reason', auth, holdEp.getReason);
  *           schema:
  *             type: object
  *             properties:
- *               orderId:
- *                 type: string
- *               reasonId:
- *                 type: string
- *               description:
+ *               orderIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *               holdReasonId:
+ *                 type: integer
+ *               note:
  *                 type: string
  *     responses:
  *       200:
