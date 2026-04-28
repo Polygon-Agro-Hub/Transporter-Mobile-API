@@ -87,7 +87,7 @@ router.post('/change-password', auth, userAuthEp.changePassword)
  *       200:
  *         description: Profile retrieved successfully
  */
-// router.get('/get-profile', auth, userAuthEp.getProfile);
+router.get('/get-profile', auth, userAuthEp.getProfile);
 
 /**
  * @openapi
