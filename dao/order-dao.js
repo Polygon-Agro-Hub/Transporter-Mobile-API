@@ -32,13 +32,11 @@ exports.GetProcessOrderInfoByInvNo = async (invNo) => {
   });
 };
 
-// Save driver order and update processorders status
 exports.SaveDriverOrder = async (driverId, processOrderId) => {
   return new Promise(async (resolve, reject) => {
     try {
-      // STEP 1: Insert driver order
       const insertSql = `
-        INSERT INTO collection_officer.driverorders
+        INSERT IGNORE INTO collection_officer.driverorders
         (driverId, orderId, drvStatus, isHandOver, createdAt)
         VALUES (?, ?, 'Todo', 0, NOW())
       `;
@@ -49,12 +47,20 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
           [driverId, processOrderId],
           (err, result) => {
             if (err) return rej(err);
+
+            if (result.affectedRows === 0) {
+              return rej(
+                new Error(
+                  "This order has already been assigned to another driver.",
+                ),
+              );
+            }
+
             res(result);
           },
         );
       });
 
-      // STEP 2: Update processorders status
       const updateSql = `
         UPDATE market_place.processorders
         SET status = 'Collected',
@@ -69,7 +75,6 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
         });
       });
 
-      // STEP 3: Insert notification
       const notificationSql = `
         INSERT INTO market_place.dashnotification
         (orderId, readStatus, title, createdAt)
@@ -94,6 +99,7 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
         status: "Collected",
       });
     } catch (error) {
+      console.error("Error in SaveDriverOrder:", error.message);
       reject(error);
     }
   });
@@ -708,7 +714,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
         if (checkErr) {
           console.error(
             "Database error checking ongoing orders:",
-            checkErr.message
+            checkErr.message,
           );
           return reject(new Error("Failed to check ongoing orders"));
         }
@@ -792,7 +798,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                     if (errN) {
                       console.error(
                         "Error inserting dashnotification:",
-                        errN.message
+                        errN.message,
                       );
                       // Non-blocking: log error but continue
                     }
@@ -822,7 +828,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                         if (err3) {
                           console.error(
                             "Error fetching updated orders:",
-                            err3.message
+                            err3.message,
                           );
                           return resolve({
                             success: true,
@@ -844,15 +850,15 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                             journeyStartedAt: row.journeyStartedAt,
                           })),
                         });
-                      }
+                      },
                     );
-                  }
+                  },
                 );
-              }
+              },
             );
-          }
+          },
         );
-      }
+      },
     );
   });
 };
@@ -1029,7 +1035,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                               "Error inserting dashnotification:",
                               errN.message,
                             );
-
                           }
 
                           const statusUpdateResult = results.find(

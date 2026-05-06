@@ -1,6 +1,5 @@
 const db = require("../startup/database");
 
-// Get My Amount
 exports.getAmount = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -261,7 +260,6 @@ exports.getAmount = async (driverId) => {
   });
 };
 
-// Get Reveived Cash
 exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -299,7 +297,6 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
           return reject(new Error("Failed to fetch amount"));
         }
 
-        // Format the results
         const formattedResults = results.map((item) => ({
           id: String(item.driverOrderId),
           orderId: item.processOrderId,
@@ -315,7 +312,6 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
   });
 };
 
-// Get driver's distributed center
 exports.getDriverDistributedCenter = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -338,13 +334,13 @@ exports.getDriverDistributedCenter = async (driverId) => {
   });
 };
 
-// Get officer by empId
 exports.getOfficerByEmpId = async (empId) => {
   return new Promise((resolve, reject) => {
     const sql = `
       SELECT id, empId, firstNameEnglish, lastNameEnglish, status, distributedCenterId
       FROM collection_officer.collectionofficer
-      WHERE empId = ? 
+      WHERE empId = ?
+        AND UPPER(empId) LIKE 'DCM%'  
       LIMIT 1
     `;
     db.collectionofficer.query(sql, [empId], (err, results) => {
@@ -357,7 +353,6 @@ exports.getOfficerByEmpId = async (empId) => {
   });
 };
 
-// Get order amounts
 exports.getOrderAmounts = async (orderIds) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -387,7 +382,6 @@ exports.getOrderAmounts = async (orderIds) => {
   });
 };
 
-// Updated handOverCash method
 exports.handOverCash = async (orderDetails, officerId) => {
   return new Promise((resolve, reject) => {
     const caseStatements = orderDetails
