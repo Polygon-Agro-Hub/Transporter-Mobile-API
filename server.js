@@ -23,6 +23,7 @@ app.use(cors(corsOptions));
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
 
+// Function to check database connection
 const DatabaseConnection = (db, name) => {
   db.getConnection((err, connection) => {
     if (err) {
@@ -67,9 +68,16 @@ app.use(`${BASE_PATH}/api/hold`, holdroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
 app.use(`${BASE_PATH}`, healthroute);
 
+// Test Route - Simple
+app.get(`${BASE_PATH}/test`, (req, res) => {
+  res.status(200).json({
+    message: "Hi Avishka 👋",
+  });
+});
+
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).send("Something broke!");
+  res.status(500).send("Something broke!!");
 });
 // Start server
 const PORT = process.env.PORT || 3000;

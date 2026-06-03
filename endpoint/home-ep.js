@@ -1,7 +1,6 @@
 const homeDao = require("../dao/home-dao");
 const asyncHandler = require("express-async-handler");
 
-// Get My Amount
 exports.getAmount = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
     return res.status(401).json({
@@ -30,7 +29,6 @@ exports.getAmount = asyncHandler(async (req, res) => {
   }
 });
 
-// Get Received Cash
 exports.getReceivedCash = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
     return res.status(401).json({
@@ -59,7 +57,6 @@ exports.getReceivedCash = asyncHandler(async (req, res) => {
   }
 });
 
-// Hand Over Cash
 exports.handOverCash = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
     return res.status(401).json({
@@ -87,7 +84,6 @@ exports.handOverCash = asyncHandler(async (req, res) => {
   }
 
   try {
-    // Step 1: Get officer by empId
     const officer = await homeDao.getOfficerByEmpId(empId);
     if (!officer) {
       return res.status(404).json({
@@ -96,34 +92,42 @@ exports.handOverCash = asyncHandler(async (req, res) => {
       });
     }
 
-    // Step 2: Check officer approval status
     if (officer.status === "Not Approved" || officer.status === "Rejected") {
       return res.status(403).json({
         status: "error",
-        message: "This Distribution Centre Manager is not in an approved status. Cash handover is not permitted.",
+        message:
+          "This Distribution Centre Manager is not in an approved status. Cash handover is not permitted.",
       });
     }
 
-    // Step 3: Get driver's distributed centre via irmId chain
+    const upperEmpId = String(officer.empId).toUpperCase();
+    if (!upperEmpId.startsWith("DCM")) {
+      return res.status(403).json({
+        status: "error",
+        message:
+          "Cash handover is only permitted to a Distribution Centre Manager (DCM). This officer is not authorized.",
+      });
+    }
+
     const driverCentre = await homeDao.getDriverDistributedCenter(driverId);
     if (!driverCentre) {
       return res.status(403).json({
         status: "error",
-        message: "Unable to determine your assigned Distribution Centre. Please contact your supervisor.",
+        message:
+          "Unable to determine your assigned Distribution Centre. Please contact your supervisor.",
       });
     }
 
-    // Step 4: Validate officer belongs to the same centre as the driver
     if (officer.distributedCenterId !== driverCentre.distributedCenterId) {
       return res.status(403).json({
         status: "error",
-        message: "This Distribution Centre Manager is not assigned to this centre. Cash handover is not permitted.",
+        message:
+          "This Distribution Centre Manager is not assigned to this centre. Cash handover is not permitted.",
       });
     }
 
     const officerDbId = officer.id;
 
-    // Step 5: Get order amounts
     const orderDetails = await homeDao.getOrderAmounts(orderIds);
     if (!orderDetails || orderDetails.length === 0) {
       return res.status(404).json({
@@ -132,7 +136,6 @@ exports.handOverCash = asyncHandler(async (req, res) => {
       });
     }
 
-    // Step 6: Perform hand over
     await homeDao.handOverCash(orderDetails, officerDbId);
 
     res.status(200).json({
@@ -145,7 +148,6 @@ exports.handOverCash = asyncHandler(async (req, res) => {
         orderCount: orderIds.length,
       },
     });
-
   } catch (error) {
     console.error("Error handing over cash:", error.message);
     res.status(500).json({
