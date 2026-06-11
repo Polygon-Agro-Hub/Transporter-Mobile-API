@@ -23,8 +23,7 @@ app.use(cors(corsOptions));
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
 
-
-
+// Function to test database connection
 const DatabaseConnection = (db, name) => {
   db.getConnection((err, connection) => {
     if (err) {
@@ -60,7 +59,7 @@ const setupSwagger = require("./startup/swagger");
 // Setup Swagger UI
 setupSwagger(app, BASE_PATH);
 
-
+// Routes
 app.use(`${BASE_PATH}/api/auth`, userroute);
 app.use(`${BASE_PATH}/api/complain`, complainroute);
 app.use(`${BASE_PATH}/api/order`, orderroute);
@@ -73,6 +72,7 @@ app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).send("Something broke!");
 });
+
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
