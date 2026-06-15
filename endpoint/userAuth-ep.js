@@ -61,6 +61,31 @@ exports.login = asyncHandler(async (req, res) => {
     });
   } catch (err) {
     console.error("Login failed:", err.message);
+
+    if (err.message === "This Employee ID is rejected") {
+      return res.status(403).json({
+        success: false,
+        message: "This Employee ID is rejected",
+        statusType: "rejected",
+      });
+    }
+
+    if (err.message === "This Employee ID is not approved") {
+      return res.status(403).json({
+        success: false,
+        message: "This Employee ID is not approved",
+        statusType: "not_approved",
+      });
+    }
+
+    if (err.message === "Account status is pending verification") {
+      return res.status(403).json({
+        success: false,
+        message: "Account status is pending verification",
+        statusType: "pending",
+      });
+    }
+
     return res.status(401).json({ success: false, message: err.message });
   }
 });
