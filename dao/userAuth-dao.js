@@ -28,12 +28,15 @@ exports.loginUser = async (empId, password) => {
     const user = results[0];
 
     if (user.status === "Rejected") {
-      throw new Error("This EMP ID is Rejected");
+      throw new Error("This Employee ID is rejected");
     }
 
-    // Check if user status is "Approved"
+    if (user.status === "Not Approved") {
+      throw new Error("This Employee ID is not approved");
+    }
+
     if (user.status !== "Approved") {
-      throw new Error("EMP ID not approved");
+      throw new Error("Account status is pending verification");
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
