@@ -135,8 +135,6 @@ exports.changePassword = asyncHandler(async (req, res) => {
 // Get User Profile
 exports.getProfile = asyncHandler(async (req, res) => {
   try {
-    console.log("Getting profile for user:", req.user);
-
     // Use empId from the decoded token
     const empId = req.user.empId;
 
@@ -148,11 +146,7 @@ exports.getProfile = asyncHandler(async (req, res) => {
       });
     }
 
-    console.log("Fetching profile for empId:", empId);
-
     const userProfile = await userDao.getUserProfile(empId);
-
-    console.log("User profile fetched successfully");
 
     return res.status(200).json({
       success: true,

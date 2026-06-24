@@ -372,10 +372,6 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         return reject(new Error("Failed to fetch driver return orders"));
       }
 
-      console.log(
-        `Found ${results.length} return orders for driver ${driverId}`,
-      );
-
       const uniqueOrdersMap = new Map();
 
       results.forEach((row) => {
