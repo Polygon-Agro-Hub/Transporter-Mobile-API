@@ -187,8 +187,6 @@ exports.getAmount = async (driverId) => {
                 });
               });
 
-              console.log("Total unique locations:", locationMap.size);
-
               let pendingLocationsCount = 0;
               let todayCompletedLocationsCount = 0;
 
@@ -217,20 +215,6 @@ exports.getAmount = async (driverId) => {
                   return orderDate === todayDateStr;
                 }).length;
 
-                console.log(`\nLocation: ${location.locationKey}`);
-                console.log(
-                  `  Order IDs: ${orders.map((o) => o.orderId).join(", ")}`,
-                );
-                console.log(
-                  `  Statuses: ${orders.map((o) => o.drvStatus).join(", ")}`,
-                );
-                console.log(
-                  `  Delivered Dates: ${orders.map((o) => (o.deliveredDate ? new Date(o.deliveredDate).toDateString() : "NULL")).join(", ")}`,
-                );
-                console.log(
-                  `  Today: ${todayDate ? new Date(todayDate).toDateString() : "NULL"}`,
-                );
-
                 if (pendingOrders > 0) {
                   pendingLocationsCount++;
                 }
@@ -238,7 +222,7 @@ exports.getAmount = async (driverId) => {
                 if (
                   totalOrders > 0 &&
                   pendingOrders === 0 &&
-                  todayFinishedOrders === totalOrders
+                  todayFinishedOrders > 0
                 ) {
                   todayCompletedLocationsCount++;
                 }

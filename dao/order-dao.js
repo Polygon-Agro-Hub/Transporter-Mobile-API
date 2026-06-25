@@ -529,9 +529,6 @@ exports.getDriverOrdersDAO = async (
 // Get Order User Details DAO
 exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
   return new Promise((resolve, reject) => {
-    console.log("DAO received processOrderIds:", processOrderIds);
-    console.log("DAO received driverId:", driverId);
-
     const sql = `
       SELECT 
         u.id as userId,
@@ -1044,17 +1041,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                           const cashUpdateResult = results.find(
                             (r) => r.type === "cash",
                           )?.result;
-
-                          console.log("Signature update successful:", {
-                            driverOrdersUpdated: result1.affectedRows,
-                            processOrdersUpdated:
-                              statusUpdateResult?.affectedRows || 0,
-                            cashOrdersUpdated:
-                              cashUpdateResult?.affectedRows || 0,
-                            totalOrders: processOrderIds.length,
-                            cashOrdersCount: cashOrderIds.length,
-                            nonCashOrdersCount: nonCashOrderIds.length,
-                          });
 
                           resolve({
                             driverOrdersUpdated: result1.affectedRows,
