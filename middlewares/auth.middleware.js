@@ -21,8 +21,6 @@ const auth = (req, res, next) => {
       });
     }
 
-    console.log("Decoded token:", decoded);
-
     // Verify user status from DB
     const sql = "SELECT status FROM collectionofficer WHERE id = ?";
     db.collectionofficer.query(sql, [decoded.id], (dbErr, results) => {
