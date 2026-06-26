@@ -6,9 +6,7 @@ const uploadFileToS3 = require("../middlewares/s3upload");
 
 // Login User
 exports.login = asyncHandler(async (req, res) => {
-  console.log("hit login");
   const { error } = loginSchema.validate(req.body, { abortEarly: false });
-  console.log(error);
 
   if (error) {
     return res.status(400).json({
@@ -22,7 +20,6 @@ exports.login = asyncHandler(async (req, res) => {
 
   try {
     const result = await userDao.loginUser(empId, password);
-    console.log("User login successful:", result);
 
     // Define JWT payload
     const payload = {
@@ -94,7 +91,6 @@ exports.login = asyncHandler(async (req, res) => {
 exports.changePassword = asyncHandler(async (req, res) => {
   const officerId = req.user.id;
   const { currentPassword, newPassword } = req.body;
-  console.log("Hit change password");
 
   try {
     const result = await userDao.changePassword(
@@ -244,8 +240,6 @@ exports.updateProfileImage = asyncHandler(async (req, res) => {
         message: result.message,
       });
     }
-
-    console.log("Profile image updated successfully");
 
     return res.status(200).json({
       success: true,

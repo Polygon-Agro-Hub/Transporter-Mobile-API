@@ -513,14 +513,6 @@ exports.getDriverOrdersDAO = async (
         return a.primaryScheduleTime.localeCompare(b.primaryScheduleTime);
       });
 
-      const statusCount = formattedResults.reduce((acc, order) => {
-        acc[order.drvStatus] = (acc[order.drvStatus] || 0) + 1;
-        return acc;
-      }, {});
-      Object.entries(statusCount).forEach(([status, count]) => {
-        console.log(`  ${status}: ${count}`);
-      });
-
       resolve(formattedResults);
     });
   });

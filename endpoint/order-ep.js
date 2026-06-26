@@ -158,16 +158,6 @@ exports.GetDriverOrders = asyncHandler(async (req, res) => {
       filterDate,
     );
 
-    // Count orders by status
-    const statusCount = orders.reduce((acc, order) => {
-      acc[order.drvStatus] = (acc[order.drvStatus] || 0) + 1;
-      return acc;
-    }, {});
-
-    Object.entries(statusCount).forEach(([status, count]) => {
-      console.log(`  ${status}: ${count}`);
-    });
-
     res.status(200).json({
       status: "success",
       data: {

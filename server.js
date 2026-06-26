@@ -33,7 +33,7 @@ const DatabaseConnection = (db, name) => {
         if (err) {
           console.error(`Error pinging ${name} database:`, err);
         } else {
-          console.log(`Ping to ${name} database successful.`);
+          console.log(`✅ Ping to ${name} database successful.`);
         }
         connection.release();
       });
@@ -67,13 +67,6 @@ app.use(`${BASE_PATH}/api/return`, returnrote);
 app.use(`${BASE_PATH}/api/hold`, holdroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
 app.use(`${BASE_PATH}`, healthroute);
-
-// Test Route - Simple
-app.get(`${BASE_PATH}/test`, (req, res) => {
-  res.status(200).json({
-    message: "Hi Avishka 👋",
-  });
-});
 
 app.use((err, req, res, next) => {
   console.error(err.stack);

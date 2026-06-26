@@ -11,6 +11,33 @@ router.use((req, res, next) => {
 
 /**
  * @openapi
+ * /test:
+ *   get:
+ *     tags:
+ *       - Health
+ *     summary: Simple test route
+ *     description: Returns a friendly welcome message Po
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Friendly message returned
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Hi Po 👋"
+ */
+router.get("/test", (req, res) => {
+  res.status(200).json({
+    message: "Hi Polygon 👋",
+  });
+});
+
+/**
+ * @openapi
  * /health:
  *   get:
  *     tags:

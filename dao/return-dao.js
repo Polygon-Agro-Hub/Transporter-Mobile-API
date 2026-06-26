@@ -382,18 +382,6 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
       const uniqueResults = Array.from(uniqueOrdersMap.values());
 
-      if (uniqueResults.length > 0) {
-        console.log("Sample unique return order data:", {
-          driverOrderId: uniqueResults[0].driverOrderId,
-          drvStatus: uniqueResults[0].drvStatus,
-          isHandOver: uniqueResults[0].isHandOver,
-          processOrderId: uniqueResults[0].processOrderId,
-          invNo: uniqueResults[0].invNo,
-          returnReasonEnglish: uniqueResults[0].returnReasonEnglish,
-          returnNote: uniqueResults[0].returnNote,
-        });
-      }
-
       const formattedResults = uniqueResults.map((row) => {
         let formattedAddress = "No Address";
         if (row.buildingType === "House") {
