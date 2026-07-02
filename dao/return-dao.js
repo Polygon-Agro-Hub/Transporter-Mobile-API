@@ -28,8 +28,6 @@ function getHandlingFee(fullTotal) {
   return 350;
 }
 
-// Promisified connection.query helper (keeps the rest of the file's
-// callback style intact, just used for the new steps below).
 function queryAsync(connection, sql, params) {
   return new Promise((resolve, reject) => {
     connection.query(sql, params, (err, results) => {
@@ -54,8 +52,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
           return reject(new Error("Transaction start failed: " + err.message));
         }
 
-        // Step 1: Get invoice numbers + financial details needed for the
-        // creditBalance deduction (fullTotal, deliveryCharge, userId).
         const getInvoiceNumbersQuery = `
           SELECT
             po.id,
@@ -94,18 +90,14 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               invNo: row.invNo,
             }));
 
-            // ── NEW: compute the creditBalance deduction for this return ──
-            // deduction = deliveryCharge + handlingFee(fullTotal)
-            // Applied as a NEGATIVE adjustment to marketplaceusers.creditBalance.
-            // Same formula for Cash and Card (see note above the function).
-            const creditBalanceDeltaByUser = {}; // userId -> total negative delta
-            const creditBalanceBreakdown = []; // for logging / API response
+            const creditBalanceDeltaByUser = {};
+            const creditBalanceBreakdown = [];
 
             invoiceResult.forEach((row) => {
               const deliveryCharge = Number(row.deliveryCharge) || 0;
               const handlingFee = getHandlingFee(row.fullTotal);
               const deduction = deliveryCharge + handlingFee;
-              const delta = -deduction; // negative value, per requirement
+              const delta = -deduction;
 
               creditBalanceDeltaByUser[row.userId] =
                 (creditBalanceDeltaByUser[row.userId] || 0) + delta;
@@ -122,13 +114,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               });
             });
 
-            console.log(
-              "[submitReturn] creditBalance deductions computed:",
-              creditBalanceBreakdown,
-            );
-            // ────────────────────────────────────────────────────────────
-
-            // Step 2: Update processorders
             const updateProcessOrdersQuery = `
             UPDATE market_place.processorders 
             SET status = 'Return'
@@ -157,7 +142,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                   });
                 }
 
-                // Step 3: Get driver order
                 const getDriverOrdersQuery = `
                   SELECT id 
                   FROM collection_officer.driverorders 
@@ -190,7 +174,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                       (row) => row.id,
                     );
 
-                    // Step 3.5: Check if any drvOrderId already exists in driverreturnorders
                     const checkExistingReturnsQuery = `
                       SELECT drvOrderId 
                       FROM collection_officer.driverreturnorders 
@@ -222,7 +205,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                           });
                         }
 
-                        // Step 4: Update driver orders
                         const updateDriverOrdersQuery = `
                           UPDATE collection_officer.driverorders 
                           SET drvStatus = 'Return'
@@ -245,7 +227,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                               });
                             }
 
-                            // Step 5: Insert into driverreturnorders table
                             const insertReturnOrdersQuery = `
                               INSERT INTO collection_officer.driverreturnorders 
                               (drvOrderId, returnReasonId, note)
@@ -276,9 +257,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                   });
                                 }
 
-                                // Step 6: NEW — apply the creditBalance
-                                // deductions computed back in Step 1, one
-                                // atomic UPDATE per affected user.
                                 let creditBalanceUpdateResults = [];
                                 try {
                                   creditBalanceUpdateResults =
@@ -293,10 +271,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                           connection,
                                           `UPDATE market_place.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
                                           [delta, numericUserId],
-                                        );
-
-                                        console.log(
-                                          `[submitReturn][creditBalance update] userId=${numericUserId} delta=${delta} affectedRows=${result.affectedRows} changedRows=${result.changedRows}`,
                                         );
 
                                         if (result.affectedRows === 0) {
@@ -314,9 +288,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                       }),
                                     );
                                   creditBalanceUpdateResults =
-                                    creditBalanceUpdateResults.filter(
-                                      Boolean,
-                                    );
+                                    creditBalanceUpdateResults.filter(Boolean);
                                 } catch (creditErr) {
                                   return connection.rollback(() => {
                                     connection.release();

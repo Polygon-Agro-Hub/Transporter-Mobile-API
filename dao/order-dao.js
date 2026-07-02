@@ -884,11 +884,6 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
   });
 };
 
-// ── Building-type → address table mapping ─────────────────────────────
-// !! VERIFY THIS against your actual marketplaceusers.buildingType enum
-// values before deploying. Written case-insensitively so 'House'/'house'/
-// 'HOUSE' all match, but if your DB uses something like 'H'/'A' or 1/2,
-// update HOUSE_VALUES / APARTMENT_VALUES below accordingly.
 const HOUSE_VALUES = ["house"];
 const APARTMENT_VALUES = ["apartment", "flat"];
 
@@ -896,11 +891,9 @@ function normalizeBuildingType(buildingType) {
   const val = (buildingType || "").toString().trim().toLowerCase();
   if (HOUSE_VALUES.includes(val)) return "house";
   if (APARTMENT_VALUES.includes(val)) return "apartment";
-  return null; // unknown — will be skipped with a warning
+  return null;
 }
 
-// Small helper to promisify connection.query without changing the rest
-// of the file's callback style.
 function queryAsync(connection, sql, params) {
   return new Promise((resolve, reject) => {
     connection.query(sql, params, (err, results) => {
@@ -967,10 +960,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             }
 
             try {
-              // ── Cash + Card: both now get isPaid = 1, amount = fullTotal ──
-              // (Previously only Cash was treated this way; other payment
-              // methods, e.g. online/gateway payments, are left untouched
-              // since they're presumably already marked paid at checkout.)
               const payableOrders = paymentDetails.filter(
                 (order) =>
                   order.paymentMethod === "Cash" ||
@@ -980,8 +969,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 (order) => order.processOrderId,
               );
 
-              // ── Delivery-charge reconciliation (all orders in the batch,
-              // regardless of payment method) ───────────────────────────
               const houseOrderIds = [];
               const apartmentOrderIds = [];
               const unknownBuildingTypeOrders = [];
@@ -1004,7 +991,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 );
               }
 
-              // orderId -> city
               const orderIdToCity = {};
 
               if (houseOrderIds.length > 0) {
@@ -1029,7 +1015,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 });
               }
 
-              // city -> charge (exact match only, per requirements)
               const cities = [
                 ...new Set(Object.values(orderIdToCity).filter(Boolean)),
               ];
@@ -1043,9 +1028,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   [cities],
                 );
 
-                // Guard against duplicate city rows in deliverycharge (e.g.
-                // same city name appearing under >1 district/province) —
-                // first match wins, and we warn so it can be cleaned up.
                 chargeRows.forEach((row) => {
                   if (cityToCharge[row.city] !== undefined) {
                     console.warn(
@@ -1057,16 +1039,12 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 });
               }
 
-              // Work out which orders have a delivery-charge mismatch, and
-              // accumulate the resulting creditBalance delta per user.
-              // NOTE: orders.deliveryCharge itself is NOT modified — only
-              // marketplaceusers.creditBalance is adjusted, per requirements.
-              const creditBalanceDeltaByUser = {}; // userId -> delta
-              const deliveryChargeCorrections = []; // for logging / API response
+              const creditBalanceDeltaByUser = {};
+              const deliveryChargeCorrections = [];
 
               for (const order of paymentDetails) {
                 const city = orderIdToCity[order.orderId];
-                if (!city) continue; // no address row found — skip
+                if (!city) continue;
 
                 const newCharge = cityToCharge[city];
                 if (newCharge === undefined) {
@@ -1080,8 +1058,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 const numericNewCharge = Number(newCharge);
 
                 if (numericNewCharge !== oldCharge) {
-                  // delta = correctDeliveryCharge - storedOrderDeliveryCharge
-                  // e.g. correct=325, stored=150 -> delta = +175
                   const delta = numericNewCharge - oldCharge;
                   creditBalanceDeltaByUser[order.userId] =
                     (creditBalanceDeltaByUser[order.userId] || 0) + delta;
@@ -1113,10 +1089,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   if (queryErr1) {
                     return connection.rollback(() => {
                       connection.release();
-                      console.error(
-                        "Error updating driverorders:",
-                        queryErr1,
-                      );
+                      console.error("Error updating driverorders:", queryErr1);
                       reject(
                         new Error(
                           `Failed to update driverorders: ${queryErr1.message}`,
@@ -1191,10 +1164,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                                 return reject(err);
                               }
 
-                              console.log(
-                                `[deliveryCharge update] orderId=${orderId} newCharge=${correctDeliveryCharge} affectedRows=${result.affectedRows} changedRows=${result.changedRows}`,
-                              );
-
                               if (result.affectedRows === 0) {
                                 console.warn(
                                   `[deliveryCharge update] ⚠️ No row matched for orders.id = ${orderId} — deliveryCharge was NOT updated.`,
@@ -1216,18 +1185,10 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     },
                   );
 
-                  // 5. NEW: adjust marketplaceusers.creditBalance for any
-                  // user whose orders had a delivery-charge mismatch.
-                  // Uses an atomic `creditBalance = creditBalance + ?` so
-                  // concurrent updates from other flows aren't clobbered.
                   Object.entries(creditBalanceDeltaByUser).forEach(
                     ([userId, delta]) => {
                       if (delta === 0) return;
 
-                      // Cast explicitly to a number — object keys are always
-                      // strings in JS, and if marketplaceusers.id is a
-                      // strict INT/BIGINT column some drivers/configs can be
-                      // picky about string vs numeric bind params.
                       const numericUserId = Number(userId);
 
                       updatePromises.push(
@@ -1243,14 +1204,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                                 );
                                 return reject(err);
                               }
-
-                              // affectedRows tells us whether WHERE id=?
-                              // actually matched a row at all. If this is 0,
-                              // the id doesn't exist / type mismatch — the
-                              // query "succeeds" but silently does nothing.
-                              console.log(
-                                `[creditBalance update] userId=${numericUserId} delta=${delta} affectedRows=${result.affectedRows} changedRows=${result.changedRows}`,
-                              );
 
                               if (result.affectedRows === 0) {
                                 console.warn(
@@ -1298,9 +1251,12 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                           VALUES ?
                         `;
 
-                        const notificationValues = processOrderIds.map(
-                          (id) => [id, "Order is Delivered", 0, new Date()],
-                        );
+                        const notificationValues = processOrderIds.map((id) => [
+                          id,
+                          "Order is Delivered",
+                          0,
+                          new Date(),
+                        ]);
 
                         db.collectionofficer.query(
                           insertNotificationSql,
@@ -1339,13 +1295,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                                 changedRows: r.changedRows,
                               }));
 
-                            if (deliveryChargeCorrections.length > 0) {
-                              console.log(
-                                "[saveSignatureAndUpdateStatusDAO] Delivery charge corrections applied:",
-                                deliveryChargeCorrections,
-                              );
-                            }
-
                             resolve({
                               driverOrdersUpdated: result1.affectedRows,
                               processOrdersUpdated:
@@ -1366,10 +1315,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     .catch((promiseErr) => {
                       return connection.rollback(() => {
                         connection.release();
-                        console.error(
-                          "Error in update promises:",
-                          promiseErr,
-                        );
+                        console.error("Error in update promises:", promiseErr);
                         reject(
                           new Error(
                             `Failed to update process orders: ${promiseErr.message}`,
