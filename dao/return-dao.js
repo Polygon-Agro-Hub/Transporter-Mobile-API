@@ -21,6 +21,24 @@ exports.getReason = async () => {
 };
 
 // Submit Return Order
+function getHandlingFee(fullTotal) {
+  const total = Number(fullTotal) || 0;
+  if (total < 2000) return 150;
+  if (total < 4000) return 250;
+  return 350;
+}
+
+// Promisified connection.query helper (keeps the rest of the file's
+// callback style intact, just used for the new steps below).
+function queryAsync(connection, sql, params) {
+  return new Promise((resolve, reject) => {
+    connection.query(sql, params, (err, results) => {
+      if (err) reject(err);
+      else resolve(results);
+    });
+  });
+}
+
 exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
   return new Promise((resolve, reject) => {
     // Get a connection from the pool
@@ -36,11 +54,20 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
           return reject(new Error("Transaction start failed: " + err.message));
         }
 
-        // Step 1: First, get invoice numbers
+        // Step 1: Get invoice numbers + financial details needed for the
+        // creditBalance deduction (fullTotal, deliveryCharge, userId).
         const getInvoiceNumbersQuery = `
-          SELECT id, invNo 
-          FROM market_place.processorders 
-          WHERE id IN (?)
+          SELECT
+            po.id,
+            po.invNo,
+            po.paymentMethod,
+            po.orderId,
+            o.fullTotal,
+            o.deliveryCharge,
+            o.userId
+          FROM market_place.processorders po
+          JOIN market_place.orders o ON po.orderId = o.id
+          WHERE po.id IN (?)
         `;
 
         connection.query(
@@ -66,6 +93,40 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               id: row.id,
               invNo: row.invNo,
             }));
+
+            // ── NEW: compute the creditBalance deduction for this return ──
+            // deduction = deliveryCharge + handlingFee(fullTotal)
+            // Applied as a NEGATIVE adjustment to marketplaceusers.creditBalance.
+            // Same formula for Cash and Card (see note above the function).
+            const creditBalanceDeltaByUser = {}; // userId -> total negative delta
+            const creditBalanceBreakdown = []; // for logging / API response
+
+            invoiceResult.forEach((row) => {
+              const deliveryCharge = Number(row.deliveryCharge) || 0;
+              const handlingFee = getHandlingFee(row.fullTotal);
+              const deduction = deliveryCharge + handlingFee;
+              const delta = -deduction; // negative value, per requirement
+
+              creditBalanceDeltaByUser[row.userId] =
+                (creditBalanceDeltaByUser[row.userId] || 0) + delta;
+
+              creditBalanceBreakdown.push({
+                processOrderId: row.id,
+                orderId: row.orderId,
+                userId: row.userId,
+                paymentMethod: row.paymentMethod,
+                fullTotal: row.fullTotal,
+                deliveryCharge,
+                handlingFee,
+                creditBalanceDelta: delta,
+              });
+            });
+
+            console.log(
+              "[submitReturn] creditBalance deductions computed:",
+              creditBalanceBreakdown,
+            );
+            // ────────────────────────────────────────────────────────────
 
             // Step 2: Update processorders
             const updateProcessOrdersQuery = `
@@ -202,7 +263,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                             connection.query(
                               insertReturnOrdersQuery,
                               [returnOrdersData],
-                              (error, insertResult) => {
+                              async (error, insertResult) => {
                                 if (error) {
                                   return connection.rollback(() => {
                                     connection.release();
@@ -210,6 +271,63 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                       new Error(
                                         "Failed to insert return orders: " +
                                         error.message,
+                                      ),
+                                    );
+                                  });
+                                }
+
+                                // Step 6: NEW — apply the creditBalance
+                                // deductions computed back in Step 1, one
+                                // atomic UPDATE per affected user.
+                                let creditBalanceUpdateResults = [];
+                                try {
+                                  creditBalanceUpdateResults =
+                                    await Promise.all(
+                                      Object.entries(
+                                        creditBalanceDeltaByUser,
+                                      ).map(async ([uid, delta]) => {
+                                        if (delta === 0) return null;
+
+                                        const numericUserId = Number(uid);
+                                        const result = await queryAsync(
+                                          connection,
+                                          `UPDATE market_place.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
+                                          [delta, numericUserId],
+                                        );
+
+                                        console.log(
+                                          `[submitReturn][creditBalance update] userId=${numericUserId} delta=${delta} affectedRows=${result.affectedRows} changedRows=${result.changedRows}`,
+                                        );
+
+                                        if (result.affectedRows === 0) {
+                                          console.warn(
+                                            `[submitReturn][creditBalance update] ⚠️ No row matched for marketplaceusers.id = ${numericUserId} — creditBalance was NOT updated.`,
+                                          );
+                                        }
+
+                                        return {
+                                          userId: numericUserId,
+                                          delta,
+                                          affectedRows: result.affectedRows,
+                                          changedRows: result.changedRows,
+                                        };
+                                      }),
+                                    );
+                                  creditBalanceUpdateResults =
+                                    creditBalanceUpdateResults.filter(
+                                      Boolean,
+                                    );
+                                } catch (creditErr) {
+                                  return connection.rollback(() => {
+                                    connection.release();
+                                    console.error(
+                                      "[submitReturn] Failed to update creditBalance:",
+                                      creditErr,
+                                    );
+                                    reject(
+                                      new Error(
+                                        "Failed to update creditBalance: " +
+                                        creditErr.message,
                                       ),
                                     );
                                   });
@@ -241,6 +359,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                     driverOrderIds,
                                     invoiceNumbers,
                                     orderDetails,
+                                    creditBalanceUpdateResults,
+                                    creditBalanceBreakdown,
                                   });
                                 });
                               },

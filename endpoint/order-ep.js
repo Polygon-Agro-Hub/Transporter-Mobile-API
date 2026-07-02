@@ -335,7 +335,13 @@ exports.saveSignature = asyncHandler(async (req, res) => {
     }
 
     // Get process order IDs from request body
-    const { processOrderIds } = req.body;
+    const { processOrderIds, latitude, longitude } = req.body;
+
+    console.log("[save-signature] raw req.body:", {
+      processOrderIds,
+      latitude,
+      longitude,
+    });
 
     if (
       !processOrderIds ||
@@ -365,6 +371,17 @@ exports.saveSignature = asyncHandler(async (req, res) => {
       });
     }
 
+    // Parse & validate GPS coordinates
+    const parsedLatitude = parseCoordinate(latitude, -90, 90);
+    const parsedLongitude = parseCoordinate(longitude, -180, 180);
+
+    if ((latitude || longitude) && (parsedLatitude === null || parsedLongitude === null)) {
+      console.warn(
+        "[save-signature] Received latitude/longitude but failed validation:",
+        { latitude, longitude, parsedLatitude, parsedLongitude },
+      );
+    }
+
     // Verify driver has access to these orders
     const verification = await orderDao.verifyDriverAccessToOrdersDAO(
       driverId,
@@ -390,6 +407,8 @@ exports.saveSignature = asyncHandler(async (req, res) => {
       processOrderIds,
       signatureUrl,
       driverId,
+      parsedLatitude,
+      parsedLongitude,
     );
 
     res.status(200).json({
@@ -400,6 +419,11 @@ exports.saveSignature = asyncHandler(async (req, res) => {
         driverOrdersUpdated: result.driverOrdersUpdated,
         processOrdersUpdated: result.processOrdersUpdated,
         updatedOrders: result.updatedOrders,
+        deliveryChargeCorrections: result.deliveryChargeCorrections,
+        creditBalanceUpdateResults: result.creditBalanceUpdateResults,
+        deliveryChargeUpdateResults: result.deliveryChargeUpdateResults,
+        deliveredLatitude: parsedLatitude,
+        deliveredLongitude: parsedLongitude,
         timestamp: new Date().toISOString(),
       },
     });
@@ -411,6 +435,16 @@ exports.saveSignature = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Returns a finite number within [min, max], or null if the input is
+// missing/empty/non-numeric/out of range. Never throws.
+function parseCoordinate(value, min, max) {
+  if (value === undefined || value === null || value === "") return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  if (num < min || num > max) return null;
+  return num;
+}
 
 //Re start Journey
 exports.ReStartJourney = asyncHandler(async (req, res) => {

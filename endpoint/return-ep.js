@@ -75,6 +75,7 @@ exports.submitReturn = asyncHandler(async (req, res) => {
         orderIds: orderIds,
         invoiceNumbers: result.invoiceNumbers || [],
         orderDetails: result.orderDetails || [],
+        creditBalanceUpdateResults: result.creditBalanceUpdateResults || [],
       },
     });
   } catch (error) {
