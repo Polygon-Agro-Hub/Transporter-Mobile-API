@@ -234,4 +234,6 @@ router.get('/get-received-cash', auth, homeEp.getReceivedCash);
  */
 router.post('/hand-over-cash', auth, homeEp.handOverCash);
 
+router.get('/get-officer-details/:empId', auth, homeEp.getOfficerDetails);
+
 module.exports = router;
