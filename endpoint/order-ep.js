@@ -1,6 +1,11 @@
 const orderDao = require("../dao/order-dao");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
+const {
+  assignDriverOrderSchema,
+  startJourneySchema,
+  saveSignatureSchema,
+} = require("../validations/order-validation");
 
 // Assign Driver Order
 exports.assignDriverOrder = asyncHandler(async (req, res) => {
@@ -10,16 +15,18 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
       message: "Unauthorized: User authentication required",
     });
   }
-  const driverId = req.user.id;
-  const { invNo } = req.body;
 
-  // Validate input
-  if (!invNo || invNo.trim() === "") {
+  const { error } = assignDriverOrderSchema.validate(req.body, { abortEarly: false });
+  if (error) {
     return res.status(400).json({
       status: "error",
-      message: "Invoice number is required",
+      message: error.details[0].message,
+      errors: error.details.map((detail) => detail.message),
     });
   }
+
+  const driverId = req.user.id;
+  const { invNo } = req.body;
 
   try {
     const driverEmpId = await orderDao.GetDriverEmpId(driverId);
@@ -252,19 +259,19 @@ exports.StartJourney = asyncHandler(async (req, res) => {
     return res.status(401).json(response);
   }
 
+  const { error } = startJourneySchema.validate(req.body, { abortEarly: false });
+  if (error) {
+    return res.status(400).json({
+      status: "error",
+      message: error.details[0].message,
+      errors: error.details.map((detail) => detail.message),
+    });
+  }
+
   const driverId = req.user.id;
   const { orderIds } = req.body;
 
   try {
-    // Validate orderIds parameter
-    if (!orderIds) {
-      const response = {
-        status: "error",
-        message: "orderIds parameter is required",
-      };
-
-      return res.status(400).json(response);
-    }
 
     // Convert to array
     let orderIdArray = [];
@@ -334,25 +341,17 @@ exports.saveSignature = asyncHandler(async (req, res) => {
       });
     }
 
-    // Get process order IDs from request body
-    const { processOrderIds, latitude, longitude } = req.body;
-
-    console.log("[save-signature] raw req.body:", {
-      processOrderIds,
-      latitude,
-      longitude,
-    });
-
-    if (
-      !processOrderIds ||
-      !Array.isArray(processOrderIds) ||
-      processOrderIds.length === 0
-    ) {
+    const { error } = saveSignatureSchema.validate(req.body, { abortEarly: false });
+    if (error) {
       return res.status(400).json({
         status: "error",
-        message: "processOrderIds array is required",
+        message: error.details[0].message,
+        errors: error.details.map((detail) => detail.message),
       });
     }
+
+    // Get process order IDs from request body
+    const { processOrderIds, latitude, longitude } = req.body;
 
     // Check if signature file is uploaded
     if (!req.file) {
@@ -457,19 +456,19 @@ exports.ReStartJourney = asyncHandler(async (req, res) => {
     return res.status(401).json(response);
   }
 
+  const { error } = startJourneySchema.validate(req.body, { abortEarly: false });
+  if (error) {
+    return res.status(400).json({
+      status: "error",
+      message: error.details[0].message,
+      errors: error.details.map((detail) => detail.message),
+    });
+  }
+
   const driverId = req.user.id;
   const { orderIds } = req.body;
 
   try {
-    // Validate orderIds parameter
-    if (!orderIds) {
-      const response = {
-        status: "error",
-        message: "orderIds parameter is required",
-      };
-
-      return res.status(400).json(response);
-    }
 
     // Convert to array
     let orderIdArray = [];

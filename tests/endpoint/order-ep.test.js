@@ -115,7 +115,7 @@ describe('Order Endpoints', () => {
       await orderEp.saveSignature(req, res);
       
       expect(uploadFileToS3).toHaveBeenCalled();
-      expect(orderDao.saveSignatureAndUpdateStatusDAO).toHaveBeenCalledWith([1], 'https://s3.url/sig.png', 1);
+      expect(orderDao.saveSignatureAndUpdateStatusDAO).toHaveBeenCalledWith([1], 'https://s3.url/sig.png', 1, null, null);
       expect(res.status).toHaveBeenCalledWith(200);
     });
   });

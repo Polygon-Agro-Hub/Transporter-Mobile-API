@@ -1,6 +1,6 @@
 const userDao = require("../dao/userAuth-dao");
 const jwt = require("jsonwebtoken");
-const { loginSchema } = require("../validations/userAuth-validations");
+const { loginSchema, changePasswordSchema } = require("../validations/userAuth-validations");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
 
@@ -89,6 +89,15 @@ exports.login = asyncHandler(async (req, res) => {
 
 // Change Password
 exports.changePassword = asyncHandler(async (req, res) => {
+  const { error } = changePasswordSchema.validate(req.body, { abortEarly: false });
+  if (error) {
+    return res.status(400).json({
+      status: "error",
+      message: "Validation failed",
+      errors: error.details.map((detail) => detail.message),
+    });
+  }
+
   const officerId = req.user.id;
   const { currentPassword, newPassword } = req.body;
 
