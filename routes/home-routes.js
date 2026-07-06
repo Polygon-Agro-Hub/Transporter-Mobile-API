@@ -234,6 +234,86 @@ router.get('/get-received-cash', auth, homeEp.getReceivedCash);
  */
 router.post('/hand-over-cash', auth, homeEp.handOverCash);
 
+/**
+ * @openapi
+ * /api/home/get-officer-details/{empId}:
+ *   get:
+ *     tags:
+ *       - Home
+ *     summary: Get Officer Details
+ *     description: Retrieve details of a collection officer (DCM) by their employee ID. Validates if they are in approved status, starts with prefix 'DCM', matches the driver's distribution center, and has a registered mobile number.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: empId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Employee ID of the collection officer (e.g. DCM001).
+ *     responses:
+ *       200:
+ *         description: Officer details retrieved successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 message:
+ *                   type: string
+ *                   example: "Officer validated"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     officerId:
+ *                       type: integer
+ *                       example: 12
+ *                     empId:
+ *                       type: string
+ *                       example: "DCM001"
+ *                     firstNameEnglish:
+ *                       type: string
+ *                       example: "Jane"
+ *                     lastNameEnglish:
+ *                       type: string
+ *                       example: "Doe"
+ *                     mobileNumber:
+ *                       type: string
+ *                       example: "+94771234567"
+ *       400:
+ *         description: Bad Request / Officer Employee ID missing or officer does not have a registered mobile number.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: Unauthorized / Driver token is invalid.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Forbidden / Distribution Centre Manager not approved, not authorized, distribution center mismatch, or driver distribution center lookup failed.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Not Found / Officer not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Database error or internal failure.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/get-officer-details/:empId', auth, homeEp.getOfficerDetails);
 
 module.exports = router;
