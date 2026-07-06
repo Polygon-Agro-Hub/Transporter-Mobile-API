@@ -321,7 +321,8 @@ exports.getDriverDistributedCenter = async (driverId) => {
 exports.getOfficerByEmpId = async (empId) => {
   return new Promise((resolve, reject) => {
     const sql = `
-      SELECT id, empId, firstNameEnglish, lastNameEnglish, status, distributedCenterId
+      SELECT id, empId, firstNameEnglish, lastNameEnglish, status, distributedCenterId,
+             phoneCode01, phoneNumber01
       FROM collection_officer.collectionofficer
       WHERE empId = ?
         AND UPPER(empId) LIKE 'DCM%'  
@@ -397,6 +398,25 @@ exports.handOverCash = async (orderDetails, officerId) => {
       }
 
       resolve(results);
+    });
+  });
+};
+
+exports.getOfficerByEmpId = async (empId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT id, empId, firstNameEnglish, lastNameEnglish, status, distributedCenterId, phoneNumber01
+      FROM collection_officer.collectionofficer
+      WHERE empId = ?
+        AND UPPER(empId) LIKE 'DCM%'  
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql, [empId], (err, results) => {
+      if (err) {
+        console.error("Database error getting officer by empId:", err.message);
+        return reject(new Error("Failed to retrieve officer"));
+      }
+      resolve(results.length > 0 ? results[0] : null);
     });
   });
 };
