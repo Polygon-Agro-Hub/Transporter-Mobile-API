@@ -13,6 +13,17 @@ const loginSchema = Joi.object({
   }),
 });
 
+// Change Password Schema
+const changePasswordSchema = Joi.object({
+  currentPassword: Joi.string().trim().required().messages({
+    "string.empty": "Current password is required",
+  }),
+  newPassword: Joi.string().trim().required().messages({
+    "string.empty": "New password is required",
+  }),
+});
+
 module.exports = {
   loginSchema,
+  changePasswordSchema,
 };

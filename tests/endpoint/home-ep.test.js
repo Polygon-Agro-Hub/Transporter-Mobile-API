@@ -86,7 +86,7 @@ describe('Home Endpoints', () => {
 
     it('should successfully hand over cash', async () => {
       req = mockRequest({ orderIds: [1, 2], totalAmount: 300, officerId: 'EMP01' }, { id: 1 });
-      homeDao.getOfficerByEmpId.mockResolvedValue({ id: 10, status: 'Approved', distributedCenterId: 5 });
+      homeDao.getOfficerByEmpId.mockResolvedValue({ id: 10, status: 'Approved', distributedCenterId: 5, empId: 'DCM01' });
       homeDao.getDriverDistributedCenter.mockResolvedValue({ distributedCenterId: 5 });
       homeDao.getOrderAmounts.mockResolvedValue([{ id: 1, amount: 100 }, { id: 2, amount: 200 }]);
       homeDao.handOverCash.mockResolvedValue(true);

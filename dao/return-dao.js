@@ -21,6 +21,22 @@ exports.getReason = async () => {
 };
 
 // Submit Return Order
+function getHandlingFee(fullTotal) {
+  const total = Number(fullTotal) || 0;
+  if (total < 2000) return 150;
+  if (total < 4000) return 250;
+  return 350;
+}
+
+function queryAsync(connection, sql, params) {
+  return new Promise((resolve, reject) => {
+    connection.query(sql, params, (err, results) => {
+      if (err) reject(err);
+      else resolve(results);
+    });
+  });
+}
+
 exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
   return new Promise((resolve, reject) => {
     // Get a connection from the pool
@@ -36,11 +52,18 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
           return reject(new Error("Transaction start failed: " + err.message));
         }
 
-        // Step 1: First, get invoice numbers
         const getInvoiceNumbersQuery = `
-          SELECT id, invNo 
-          FROM market_place.processorders 
-          WHERE id IN (?)
+          SELECT
+            po.id,
+            po.invNo,
+            po.paymentMethod,
+            po.orderId,
+            o.fullTotal,
+            o.deliveryCharge,
+            o.userId
+          FROM market_place.processorders po
+          JOIN market_place.orders o ON po.orderId = o.id
+          WHERE po.id IN (?)
         `;
 
         connection.query(
@@ -67,7 +90,30 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               invNo: row.invNo,
             }));
 
-            // Step 2: Update processorders
+            const creditBalanceDeltaByUser = {};
+            const creditBalanceBreakdown = [];
+
+            invoiceResult.forEach((row) => {
+              const deliveryCharge = Number(row.deliveryCharge) || 0;
+              const handlingFee = getHandlingFee(row.fullTotal);
+              const deduction = deliveryCharge + handlingFee;
+              const delta = -deduction;
+
+              creditBalanceDeltaByUser[row.userId] =
+                (creditBalanceDeltaByUser[row.userId] || 0) + delta;
+
+              creditBalanceBreakdown.push({
+                processOrderId: row.id,
+                orderId: row.orderId,
+                userId: row.userId,
+                paymentMethod: row.paymentMethod,
+                fullTotal: row.fullTotal,
+                deliveryCharge,
+                handlingFee,
+                creditBalanceDelta: delta,
+              });
+            });
+
             const updateProcessOrdersQuery = `
             UPDATE market_place.processorders 
             SET status = 'Return'
@@ -96,7 +142,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                   });
                 }
 
-                // Step 3: Get driver order
                 const getDriverOrdersQuery = `
                   SELECT id 
                   FROM collection_officer.driverorders 
@@ -129,7 +174,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                       (row) => row.id,
                     );
 
-                    // Step 3.5: Check if any drvOrderId already exists in driverreturnorders
                     const checkExistingReturnsQuery = `
                       SELECT drvOrderId 
                       FROM collection_officer.driverreturnorders 
@@ -161,7 +205,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                           });
                         }
 
-                        // Step 4: Update driver orders
                         const updateDriverOrdersQuery = `
                           UPDATE collection_officer.driverorders 
                           SET drvStatus = 'Return'
@@ -184,7 +227,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                               });
                             }
 
-                            // Step 5: Insert into driverreturnorders table
                             const insertReturnOrdersQuery = `
                               INSERT INTO collection_officer.driverreturnorders 
                               (drvOrderId, returnReasonId, note)
@@ -202,7 +244,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                             connection.query(
                               insertReturnOrdersQuery,
                               [returnOrdersData],
-                              (error, insertResult) => {
+                              async (error, insertResult) => {
                                 if (error) {
                                   return connection.rollback(() => {
                                     connection.release();
@@ -210,6 +252,54 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                       new Error(
                                         "Failed to insert return orders: " +
                                         error.message,
+                                      ),
+                                    );
+                                  });
+                                }
+
+                                let creditBalanceUpdateResults = [];
+                                try {
+                                  creditBalanceUpdateResults =
+                                    await Promise.all(
+                                      Object.entries(
+                                        creditBalanceDeltaByUser,
+                                      ).map(async ([uid, delta]) => {
+                                        if (delta === 0) return null;
+
+                                        const numericUserId = Number(uid);
+                                        const result = await queryAsync(
+                                          connection,
+                                          `UPDATE market_place.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
+                                          [delta, numericUserId],
+                                        );
+
+                                        if (result.affectedRows === 0) {
+                                          console.warn(
+                                            `[submitReturn][creditBalance update] ⚠️ No row matched for marketplaceusers.id = ${numericUserId} — creditBalance was NOT updated.`,
+                                          );
+                                        }
+
+                                        return {
+                                          userId: numericUserId,
+                                          delta,
+                                          affectedRows: result.affectedRows,
+                                          changedRows: result.changedRows,
+                                        };
+                                      }),
+                                    );
+                                  creditBalanceUpdateResults =
+                                    creditBalanceUpdateResults.filter(Boolean);
+                                } catch (creditErr) {
+                                  return connection.rollback(() => {
+                                    connection.release();
+                                    console.error(
+                                      "[submitReturn] Failed to update creditBalance:",
+                                      creditErr,
+                                    );
+                                    reject(
+                                      new Error(
+                                        "Failed to update creditBalance: " +
+                                        creditErr.message,
                                       ),
                                     );
                                   });
@@ -241,6 +331,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                     driverOrderIds,
                                     invoiceNumbers,
                                     orderDetails,
+                                    creditBalanceUpdateResults,
+                                    creditBalanceBreakdown,
                                   });
                                 });
                               },
@@ -381,18 +473,6 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
       });
 
       const uniqueResults = Array.from(uniqueOrdersMap.values());
-
-      if (uniqueResults.length > 0) {
-        console.log("Sample unique return order data:", {
-          driverOrderId: uniqueResults[0].driverOrderId,
-          drvStatus: uniqueResults[0].drvStatus,
-          isHandOver: uniqueResults[0].isHandOver,
-          processOrderId: uniqueResults[0].processOrderId,
-          invNo: uniqueResults[0].invNo,
-          returnReasonEnglish: uniqueResults[0].returnReasonEnglish,
-          returnNote: uniqueResults[0].returnNote,
-        });
-      }
 
       const formattedResults = uniqueResults.map((row) => {
         let formattedAddress = "No Address";

@@ -16,16 +16,12 @@ const r2Client = new S3Client({
  * @returns {Promise<void>}
  */
 const deleteFromR2 = async (imageUrl) => {
-  console.log("Image URL to delete:", imageUrl);
   const extractFolderAndFileName = (url) => {
     const path = new URL(url).pathname;
     const pathSegments = path.split("/");
 
     const folder = pathSegments.slice(1, -1).join("/");
-    console.log("Folder Path:", folder);
-
     const fileName = pathSegments[pathSegments.length - 1];
-    console.log("File Name:", fileName);
 
     return { folder, fileName };
   };
@@ -40,7 +36,6 @@ const deleteFromR2 = async (imageUrl) => {
   try {
     const command = new DeleteObjectCommand(deleteParams);
     await r2Client.send(command);
-    console.log(`Deleted object from R2: ${folder}/${fileName}`);
   } catch (error) {
     console.error("Error deleting file from R2:", error);
     throw new Error("Failed to delete file from R2");

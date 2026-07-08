@@ -156,3 +156,100 @@ exports.handOverCash = asyncHandler(async (req, res) => {
     });
   }
 });
+
+exports.getOfficerDetails = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const { empId } = req.params;
+  const driverId = req.user.id;
+
+  if (!empId) {
+    return res.status(400).json({
+      status: "error",
+      message: "Officer Employee ID is required",
+    });
+  }
+
+  try {
+    const officer = await homeDao.getOfficerByEmpId(empId);
+    if (!officer) {
+      return res.status(404).json({
+        status: "error",
+        message: "Officer not found in the system",
+      });
+    }
+
+    if (officer.status === "Not Approved" || officer.status === "Rejected") {
+      return res.status(403).json({
+        status: "error",
+        message:
+          "This Distribution Centre Manager is not in an approved status. Cash handover is not permitted.",
+      });
+    }
+
+    const upperEmpId = String(officer.empId).toUpperCase();
+    if (!upperEmpId.startsWith("DCM")) {
+      return res.status(403).json({
+        status: "error",
+        message:
+          "Cash handover is only permitted to a Distribution Centre Manager (DCM). This officer is not authorized.",
+      });
+    }
+
+    const driverCentre = await homeDao.getDriverDistributedCenter(driverId);
+    if (!driverCentre) {
+      return res.status(403).json({
+        status: "error",
+        message:
+          "Unable to determine your assigned Distribution Centre. Please contact your supervisor.",
+      });
+    }
+
+    if (officer.distributedCenterId !== driverCentre.distributedCenterId) {
+      return res.status(403).json({
+        status: "error",
+        message:
+          "This Distribution Centre Manager is not assigned to this centre. Cash handover is not permitted.",
+      });
+    }
+
+    if (!officer.phoneNumber01) {
+      return res.status(400).json({
+        status: "error",
+        message: "Officer does not have a registered mobile number",
+      });
+    }
+
+    const rawCode = String(officer.phoneCode01 || "+94").trim();
+    let rawNumber = String(officer.phoneNumber01).trim();
+
+    if (rawNumber.startsWith("0")) {
+      rawNumber = rawNumber.substring(1);
+    }
+
+    const fullMobileNumber = `${rawCode}${rawNumber}`;
+
+    res.status(200).json({
+      status: "success",
+      message: "Officer validated",
+      data: {
+        officerId: officer.id,
+        empId: officer.empId,
+        firstNameEnglish: officer.firstNameEnglish,
+        lastNameEnglish: officer.lastNameEnglish,
+        mobileNumber: fullMobileNumber,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting officer details:", error.message);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to validate officer. Please try again.",
+    });
+  }
+});

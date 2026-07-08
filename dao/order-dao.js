@@ -513,14 +513,6 @@ exports.getDriverOrdersDAO = async (
         return a.primaryScheduleTime.localeCompare(b.primaryScheduleTime);
       });
 
-      const statusCount = formattedResults.reduce((acc, order) => {
-        acc[order.drvStatus] = (acc[order.drvStatus] || 0) + 1;
-        return acc;
-      }, {});
-      Object.entries(statusCount).forEach(([status, count]) => {
-        console.log(`  ${status}: ${count}`);
-      });
-
       resolve(formattedResults);
     });
   });
@@ -860,224 +852,6 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
   });
 };
 
-// Save Signature DAO
-exports.saveSignatureAndUpdateStatusDAO = async (
-  processOrderIds,
-  signaturePath,
-) => {
-  return new Promise((resolve, reject) => {
-    db.collectionofficer.getConnection((err, connection) => {
-      if (err) {
-        console.error("Error getting database connection:", err);
-        return reject(
-          new Error(`Failed to get database connection: ${err.message}`),
-        );
-      }
-
-      connection.beginTransaction((beginErr) => {
-        if (beginErr) {
-          connection.release();
-          return reject(
-            new Error(`Failed to begin transaction: ${beginErr.message}`),
-          );
-        }
-
-        const fetchPaymentDetailsQuery = `
-          SELECT po.id as processOrderId, po.paymentMethod, po.orderId, o.fullTotal
-          FROM market_place.processorders po
-          JOIN market_place.orders o ON po.orderId = o.id
-          WHERE po.id IN (?)
-        `;
-
-        connection.query(
-          fetchPaymentDetailsQuery,
-          [processOrderIds],
-          (fetchErr, paymentDetails) => {
-            if (fetchErr) {
-              return connection.rollback(() => {
-                connection.release();
-                console.error("Error fetching payment details:", fetchErr);
-                reject(
-                  new Error(
-                    `Failed to fetch payment details: ${fetchErr.message}`,
-                  ),
-                );
-              });
-            }
-
-            const cashOrders = paymentDetails.filter(
-              (order) => order.paymentMethod === "Cash",
-            );
-            const nonCashOrders = paymentDetails.filter(
-              (order) => order.paymentMethod !== "Cash",
-            );
-
-            const cashOrderIds = cashOrders.map(
-              (order) => order.processOrderId,
-            );
-            const nonCashOrderIds = nonCashOrders.map(
-              (order) => order.processOrderId,
-            );
-
-            // 1. Update driverorders
-            const updateDriverOrdersQuery = `
-              UPDATE collection_officer.driverorders 
-              SET 
-                signature = ?,
-                drvStatus = 'Completed'
-              WHERE orderId IN (?)
-            `;
-
-            connection.query(
-              updateDriverOrdersQuery,
-              [signaturePath, processOrderIds],
-              (queryErr1, result1) => {
-                if (queryErr1) {
-                  return connection.rollback(() => {
-                    connection.release();
-                    console.error("Error updating driverorders:", queryErr1);
-                    reject(
-                      new Error(
-                        `Failed to update driverorders: ${queryErr1.message}`,
-                      ),
-                    );
-                  });
-                }
-
-                let updatePromises = [];
-
-                // 2. Update processorders: Delivered + deliveredTime
-                const updateAllOrdersStatusQuery = `
-                  UPDATE market_place.processorders 
-                  SET 
-                    status = 'Delivered',
-                    deliveredTime = CURRENT_TIMESTAMP
-                  WHERE id IN (?)
-                `;
-
-                updatePromises.push(
-                  new Promise((resolve, reject) => {
-                    connection.query(
-                      updateAllOrdersStatusQuery,
-                      [processOrderIds],
-                      (err, result) => {
-                        if (err) reject(err);
-                        else resolve({ type: "status", result });
-                      },
-                    );
-                  }),
-                );
-
-                // 3. Cash orders handling
-                if (cashOrderIds.length > 0) {
-                  const updateCashOrdersQuery = `
-                    UPDATE market_place.processorders po
-                    JOIN market_place.orders o ON po.orderId = o.id
-                    SET po.isPaid = 1, po.amount = o.fullTotal
-                    WHERE po.id IN (?)
-                  `;
-
-                  updatePromises.push(
-                    new Promise((resolve, reject) => {
-                      connection.query(
-                        updateCashOrdersQuery,
-                        [cashOrderIds],
-                        (err, result) => {
-                          if (err) reject(err);
-                          else resolve({ type: "cash", result });
-                        },
-                      );
-                    }),
-                  );
-                }
-
-                Promise.all(updatePromises)
-                  .then((results) => {
-                    connection.commit((commitErr) => {
-                      if (commitErr) {
-                        return connection.rollback(() => {
-                          connection.release();
-                          console.error(
-                            "Error committing transaction:",
-                            commitErr,
-                          );
-                          reject(
-                            new Error(
-                              `Failed to commit transaction: ${commitErr.message}`,
-                            ),
-                          );
-                        });
-                      }
-
-                      connection.release();
-
-                      const insertNotificationSql = `
-                        INSERT INTO market_place.dashnotification (orderId, title, readStatus, createdAt)
-                        VALUES ?
-                      `;
-
-                      const notificationValues = processOrderIds.map((id) => [
-                        id,
-                        "Order is Delivered",
-                        0,
-                        new Date(),
-                      ]);
-
-                      db.collectionofficer.query(
-                        insertNotificationSql,
-                        [notificationValues],
-                        (errN) => {
-                          if (errN) {
-                            console.error(
-                              "Error inserting dashnotification:",
-                              errN.message,
-                            );
-                          }
-
-                          const statusUpdateResult = results.find(
-                            (r) => r.type === "status",
-                          )?.result;
-
-                          const cashUpdateResult = results.find(
-                            (r) => r.type === "cash",
-                          )?.result;
-
-                          resolve({
-                            driverOrdersUpdated: result1.affectedRows,
-                            processOrdersUpdated:
-                              statusUpdateResult?.affectedRows || 0,
-                            cashOrdersUpdated:
-                              cashUpdateResult?.affectedRows || 0,
-                            signatureUrl: signaturePath,
-                            totalOrders: processOrderIds.length,
-                            cashOrdersCount: cashOrderIds.length,
-                            nonCashOrdersCount: nonCashOrderIds.length,
-                          });
-                        },
-                      );
-                    });
-                  })
-                  .catch((promiseErr) => {
-                    return connection.rollback(() => {
-                      connection.release();
-                      console.error("Error in update promises:", promiseErr);
-                      reject(
-                        new Error(
-                          `Failed to update process orders: ${promiseErr.message}`,
-                        ),
-                      );
-                    });
-                  });
-              },
-            );
-          },
-        );
-      });
-    });
-  });
-};
-
-// Verify Driver Has Access To The Process Orders
 exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -1107,6 +881,468 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
         });
       },
     );
+  });
+};
+
+const HOUSE_VALUES = ["house"];
+const APARTMENT_VALUES = ["apartment", "flat"];
+
+function normalizeBuildingType(buildingType) {
+  const val = (buildingType || "").toString().trim().toLowerCase();
+  if (HOUSE_VALUES.includes(val)) return "house";
+  if (APARTMENT_VALUES.includes(val)) return "apartment";
+  return null;
+}
+
+function queryAsync(connection, sql, params) {
+  return new Promise((resolve, reject) => {
+    connection.query(sql, params, (err, results) => {
+      if (err) reject(err);
+      else resolve(results);
+    });
+  });
+}
+
+exports.saveSignatureAndUpdateStatusDAO = async (
+  processOrderIds,
+  signaturePath,
+  driverId,
+  latitude,
+  longitude,
+) => {
+  return new Promise((resolve, reject) => {
+    db.collectionofficer.getConnection((err, connection) => {
+      if (err) {
+        console.error("Error getting database connection:", err);
+        return reject(
+          new Error(`Failed to get database connection: ${err.message}`),
+        );
+      }
+
+      connection.beginTransaction((beginErr) => {
+        if (beginErr) {
+          connection.release();
+          return reject(
+            new Error(`Failed to begin transaction: ${beginErr.message}`),
+          );
+        }
+
+        const fetchPaymentDetailsQuery = `
+          SELECT
+            po.id AS processOrderId,
+            po.paymentMethod,
+            po.orderId,
+            o.fullTotal,
+            o.userId,
+            o.deliveryCharge AS currentDeliveryCharge,
+            mu.buildingType,
+            mu.creditBalance
+          FROM market_place.processorders po
+          JOIN market_place.orders o ON po.orderId = o.id
+          JOIN market_place.marketplaceusers mu ON o.userId = mu.id
+          WHERE po.id IN (?)
+        `;
+
+        connection.query(
+          fetchPaymentDetailsQuery,
+          [processOrderIds],
+          async (fetchErr, paymentDetails) => {
+            if (fetchErr) {
+              return connection.rollback(() => {
+                connection.release();
+                console.error("Error fetching payment details:", fetchErr);
+                reject(
+                  new Error(
+                    `Failed to fetch payment details: ${fetchErr.message}`,
+                  ),
+                );
+              });
+            }
+
+            try {
+              const payableOrders = paymentDetails.filter(
+                (order) =>
+                  order.paymentMethod === "Cash" ||
+                  order.paymentMethod === "Card",
+              );
+              const payableOrderIds = payableOrders.map(
+                (order) => order.processOrderId,
+              );
+
+              const houseOrderIds = [];
+              const apartmentOrderIds = [];
+              const unknownBuildingTypeOrders = [];
+
+              for (const order of paymentDetails) {
+                const kind = normalizeBuildingType(order.buildingType);
+                if (kind === "house") houseOrderIds.push(order.orderId);
+                else if (kind === "apartment")
+                  apartmentOrderIds.push(order.orderId);
+                else unknownBuildingTypeOrders.push(order);
+              }
+
+              if (unknownBuildingTypeOrders.length > 0) {
+                console.warn(
+                  "[saveSignatureAndUpdateStatusDAO] Unrecognized buildingType, skipping delivery-charge check for:",
+                  unknownBuildingTypeOrders.map((o) => ({
+                    orderId: o.orderId,
+                    buildingType: o.buildingType,
+                  })),
+                );
+              }
+
+              const orderIdToCity = {};
+
+              if (houseOrderIds.length > 0) {
+                const houseRows = await queryAsync(
+                  connection,
+                  `SELECT orderId, city FROM market_place.orderhouse WHERE orderId IN (?)`,
+                  [houseOrderIds],
+                );
+                houseRows.forEach((row) => {
+                  orderIdToCity[row.orderId] = row.city;
+                });
+              }
+
+              if (apartmentOrderIds.length > 0) {
+                const apartmentRows = await queryAsync(
+                  connection,
+                  `SELECT orderId, city FROM market_place.orderapartment WHERE orderId IN (?)`,
+                  [apartmentOrderIds],
+                );
+                apartmentRows.forEach((row) => {
+                  orderIdToCity[row.orderId] = row.city;
+                });
+              }
+
+              const cities = [
+                ...new Set(Object.values(orderIdToCity).filter(Boolean)),
+              ];
+
+              const cityToCharge = {};
+
+              if (cities.length > 0) {
+                const chargeRows = await queryAsync(
+                  connection,
+                  `SELECT city, charge FROM collection_officer.deliverycharge WHERE city IN (?)`,
+                  [cities],
+                );
+
+                chargeRows.forEach((row) => {
+                  if (cityToCharge[row.city] !== undefined) {
+                    console.warn(
+                      `[saveSignatureAndUpdateStatusDAO] Multiple deliverycharge rows found for city "${row.city}" — using the first match (${cityToCharge[row.city]}), ignoring ${row.charge}.`,
+                    );
+                    return;
+                  }
+                  cityToCharge[row.city] = row.charge;
+                });
+              }
+
+              const creditBalanceDeltaByUser = {};
+              const deliveryChargeCorrections = [];
+
+              for (const order of paymentDetails) {
+                const city = orderIdToCity[order.orderId];
+                if (!city) continue;
+
+                const newCharge = cityToCharge[city];
+                if (newCharge === undefined) {
+                  console.warn(
+                    `[saveSignatureAndUpdateStatusDAO] No deliverycharge entry for city "${city}" (orderId ${order.orderId}) — skipping.`,
+                  );
+                  continue;
+                }
+
+                const oldCharge = Number(order.currentDeliveryCharge) || 0;
+                const numericNewCharge = Number(newCharge);
+
+                if (numericNewCharge !== oldCharge) {
+                  const delta = numericNewCharge - oldCharge;
+                  creditBalanceDeltaByUser[order.userId] =
+                    (creditBalanceDeltaByUser[order.userId] || 0) + delta;
+
+                  deliveryChargeCorrections.push({
+                    orderId: order.orderId,
+                    userId: order.userId,
+                    city,
+                    storedOrderDeliveryCharge: oldCharge,
+                    correctDeliveryCharge: numericNewCharge,
+                    creditBalanceDelta: delta,
+                  });
+                }
+              }
+
+              // 1. Update driverorders
+              const updateDriverOrdersQuery = `
+                UPDATE collection_officer.driverorders 
+                SET 
+                  signature = ?,
+                  drvStatus = 'Completed'
+                WHERE orderId IN (?)
+              `;
+
+              connection.query(
+                updateDriverOrdersQuery,
+                [signaturePath, processOrderIds],
+                (queryErr1, result1) => {
+                  if (queryErr1) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      console.error("Error updating driverorders:", queryErr1);
+                      reject(
+                        new Error(
+                          `Failed to update driverorders: ${queryErr1.message}`,
+                        ),
+                      );
+                    });
+                  }
+
+                  let updatePromises = [];
+
+                  // 2. Update processorders: Delivered + deliveredTime + GPS
+                  const updateAllOrdersStatusQuery = `
+                    UPDATE market_place.processorders 
+                    SET 
+                      status = 'Delivered',
+                      deliveredTime = CURRENT_TIMESTAMP,
+                      deliveredLatitude = ?,
+                      deliveredLongitude = ?
+                    WHERE id IN (?)
+                  `;
+
+                  updatePromises.push(
+                    new Promise((resolve, reject) => {
+                      connection.query(
+                        updateAllOrdersStatusQuery,
+                        [latitude, longitude, processOrderIds],
+                        (err, result) => {
+                          if (err) reject(err);
+                          else resolve({ type: "status", result });
+                        },
+                      );
+                    }),
+                  );
+
+                  // 3. Cash + Card orders: mark paid
+                  if (payableOrderIds.length > 0) {
+                    const updatePayableOrdersQuery = `
+                      UPDATE market_place.processorders po
+                      JOIN market_place.orders o ON po.orderId = o.id
+                      SET po.isPaid = 1, po.amount = o.fullTotal
+                      WHERE po.id IN (?)
+                    `;
+
+                    updatePromises.push(
+                      new Promise((resolve, reject) => {
+                        connection.query(
+                          updatePayableOrdersQuery,
+                          [payableOrderIds],
+                          (err, result) => {
+                            if (err) reject(err);
+                            else resolve({ type: "payable", result });
+                          },
+                        );
+                      }),
+                    );
+                  }
+
+                  // 4. NEW: correct orders.deliveryCharge to the recalculated value
+                  deliveryChargeCorrections.forEach(
+                    ({ orderId, correctDeliveryCharge }) => {
+                      updatePromises.push(
+                        new Promise((resolve, reject) => {
+                          connection.query(
+                            `UPDATE market_place.orders SET deliveryCharge = ? WHERE id = ?`,
+                            [correctDeliveryCharge, orderId],
+                            (err, result) => {
+                              if (err) {
+                                console.error(
+                                  `[deliveryCharge update] FAILED for orderId ${orderId}:`,
+                                  err.message,
+                                );
+                                return reject(err);
+                              }
+
+                              if (result.affectedRows === 0) {
+                                console.warn(
+                                  `[deliveryCharge update] ⚠️ No row matched for orders.id = ${orderId} — deliveryCharge was NOT updated.`,
+                                );
+                              }
+
+                              resolve({
+                                type: "deliveryCharge",
+                                orderId,
+                                newCharge: correctDeliveryCharge,
+                                affectedRows: result.affectedRows,
+                                changedRows: result.changedRows,
+                                result,
+                              });
+                            },
+                          );
+                        }),
+                      );
+                    },
+                  );
+
+                  Object.entries(creditBalanceDeltaByUser).forEach(
+                    ([userId, delta]) => {
+                      if (delta === 0) return;
+
+                      const numericUserId = Number(userId);
+
+                      updatePromises.push(
+                        new Promise((resolve, reject) => {
+                          connection.query(
+                            `UPDATE market_place.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
+                            [delta, numericUserId],
+                            (err, result) => {
+                              if (err) {
+                                console.error(
+                                  `[creditBalance update] FAILED for userId ${numericUserId}, delta ${delta}:`,
+                                  err.message,
+                                );
+                                return reject(err);
+                              }
+
+                              if (result.affectedRows === 0) {
+                                console.warn(
+                                  `[creditBalance update] ⚠️ No row matched for marketplaceusers.id = ${numericUserId} — creditBalance was NOT updated.`,
+                                );
+                              }
+
+                              resolve({
+                                type: "creditBalance",
+                                userId: numericUserId,
+                                delta,
+                                affectedRows: result.affectedRows,
+                                changedRows: result.changedRows,
+                                result,
+                              });
+                            },
+                          );
+                        }),
+                      );
+                    },
+                  );
+
+                  Promise.all(updatePromises)
+                    .then((results) => {
+                      connection.commit((commitErr) => {
+                        if (commitErr) {
+                          return connection.rollback(() => {
+                            connection.release();
+                            console.error(
+                              "Error committing transaction:",
+                              commitErr,
+                            );
+                            reject(
+                              new Error(
+                                `Failed to commit transaction: ${commitErr.message}`,
+                              ),
+                            );
+                          });
+                        }
+
+                        connection.release();
+
+                        const insertNotificationSql = `
+                          INSERT INTO market_place.dashnotification (orderId, title, readStatus, createdAt)
+                          VALUES ?
+                        `;
+
+                        const notificationValues = processOrderIds.map((id) => [
+                          id,
+                          "Order is Delivered",
+                          0,
+                          new Date(),
+                        ]);
+
+                        db.collectionofficer.query(
+                          insertNotificationSql,
+                          [notificationValues],
+                          (errN) => {
+                            if (errN) {
+                              console.error(
+                                "Error inserting dashnotification:",
+                                errN.message,
+                              );
+                            }
+
+                            const statusUpdateResult = results.find(
+                              (r) => r.type === "status",
+                            )?.result;
+
+                            const payableUpdateResult = results.find(
+                              (r) => r.type === "payable",
+                            )?.result;
+
+                            const creditBalanceUpdateResults = results
+                              .filter((r) => r.type === "creditBalance")
+                              .map((r) => ({
+                                userId: r.userId,
+                                delta: r.delta,
+                                affectedRows: r.affectedRows,
+                                changedRows: r.changedRows,
+                              }));
+
+                            const deliveryChargeUpdateResults = results
+                              .filter((r) => r.type === "deliveryCharge")
+                              .map((r) => ({
+                                orderId: r.orderId,
+                                newCharge: r.newCharge,
+                                affectedRows: r.affectedRows,
+                                changedRows: r.changedRows,
+                              }));
+
+                            resolve({
+                              driverOrdersUpdated: result1.affectedRows,
+                              processOrdersUpdated:
+                                statusUpdateResult?.affectedRows || 0,
+                              payableOrdersUpdated:
+                                payableUpdateResult?.affectedRows || 0,
+                              signatureUrl: signaturePath,
+                              totalOrders: processOrderIds.length,
+                              payableOrdersCount: payableOrderIds.length,
+                              deliveryChargeCorrections,
+                              creditBalanceUpdateResults,
+                              deliveryChargeUpdateResults,
+                            });
+                          },
+                        );
+                      });
+                    })
+                    .catch((promiseErr) => {
+                      return connection.rollback(() => {
+                        connection.release();
+                        console.error("Error in update promises:", promiseErr);
+                        reject(
+                          new Error(
+                            `Failed to update process orders: ${promiseErr.message}`,
+                          ),
+                        );
+                      });
+                    });
+                },
+              );
+            } catch (asyncErr) {
+              return connection.rollback(() => {
+                connection.release();
+                console.error(
+                  "Error during delivery-charge reconciliation:",
+                  asyncErr,
+                );
+                reject(
+                  new Error(
+                    `Failed to reconcile delivery charges: ${asyncErr.message}`,
+                  ),
+                );
+              });
+            }
+          },
+        );
+      });
+    });
   });
 };
 
