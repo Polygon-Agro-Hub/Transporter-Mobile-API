@@ -68,6 +68,7 @@ app.use(`${BASE_PATH}/api/hold`, holdroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
 app.use(`${BASE_PATH}`, healthroute);
 
+// Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).send("Something broke!!");
