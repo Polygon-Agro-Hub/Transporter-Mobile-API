@@ -935,7 +935,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             o.fullTotal,
             o.userId,
             o.deliveryCharge AS currentDeliveryCharge,
-            mu.buildingType,
+            o.buildingType,
             mu.creditBalance
           FROM market_place.processorders po
           JOIN market_place.orders o ON po.orderId = o.id
@@ -948,15 +948,16 @@ exports.saveSignatureAndUpdateStatusDAO = async (
           [processOrderIds],
           async (fetchErr, paymentDetails) => {
             if (fetchErr) {
-              return connection.rollback(() => {
+              connection.rollback(() => {
                 connection.release();
-                console.error("Error fetching payment details:", fetchErr);
-                reject(
-                  new Error(
-                    `Failed to fetch payment details: ${fetchErr.message}`,
-                  ),
-                );
               });
+              console.error("Error fetching payment details:", fetchErr);
+              reject(
+                new Error(
+                  `Failed to fetch payment details: ${fetchErr.message}`,
+                ),
+              );
+              return;
             }
 
             try {
@@ -1326,18 +1327,19 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 },
               );
             } catch (asyncErr) {
-              return connection.rollback(() => {
+              connection.rollback(() => {
                 connection.release();
-                console.error(
-                  "Error during delivery-charge reconciliation:",
-                  asyncErr,
-                );
-                reject(
-                  new Error(
-                    `Failed to reconcile delivery charges: ${asyncErr.message}`,
-                  ),
-                );
               });
+              console.error(
+                "Error during delivery-charge reconciliation:",
+                asyncErr,
+              );
+              reject(
+                new Error(
+                  `Failed to reconcile delivery charges: ${asyncErr.message}`,
+                ),
+              );
+              return;
             }
           },
         );

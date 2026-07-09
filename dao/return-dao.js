@@ -1,4 +1,5 @@
 const db = require("../startup/database");
+const { HANDLING_FEE_CONSTANTS } = require("../constants/handling-fee");
 
 // Get All Return Reasons
 exports.getReason = async () => {
@@ -23,9 +24,13 @@ exports.getReason = async () => {
 // Submit Return Order
 function getHandlingFee(fullTotal) {
   const total = Number(fullTotal) || 0;
-  if (total < 2000) return 150;
-  if (total < 4000) return 250;
-  return 350;
+  if (total < HANDLING_FEE_CONSTANTS.LOW_TOTAL_LIMIT) {
+    return HANDLING_FEE_CONSTANTS.LOW_FEE;
+  }
+  if (total < HANDLING_FEE_CONSTANTS.MID_TOTAL_LIMIT) {
+    return HANDLING_FEE_CONSTANTS.MID_FEE;
+  }
+  return HANDLING_FEE_CONSTANTS.HIGH_FEE;
 }
 
 function queryAsync(connection, sql, params) {
