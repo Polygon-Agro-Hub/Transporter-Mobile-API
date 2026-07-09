@@ -47,6 +47,7 @@ DatabaseConnection(collectionofficer, "CollectionOfficer");
 DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
+// Setup routes
 const userroute = require("./routes/userAuth-routes");
 const complainroute = require("./routes/complain-routes");
 const orderroute = require("./routes/order-routes");
