@@ -932,10 +932,13 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             po.id AS processOrderId,
             po.paymentMethod,
             po.orderId,
+            po.amount AS paidAmount,
             o.fullTotal,
             o.userId,
             o.deliveryCharge AS currentDeliveryCharge,
             o.buildingType,
+            o.isCoupon,
+            o.couponValue,
             mu.creditBalance
           FROM market_place.processorders po
           JOIN market_place.orders o ON po.orderId = o.id
@@ -1043,6 +1046,42 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               const creditBalanceDeltaByUser = {};
               const deliveryChargeCorrections = [];
 
+              // Query package totals and additional totals for these orders
+              const orderIds = paymentDetails.map((o) => o.orderId);
+              const orderIdToPackageTotal = {};
+              const orderIdToAdditionalTotal = {};
+
+              if (orderIds.length > 0) {
+                const packageRows = await queryAsync(
+                  connection,
+                  `
+                    SELECT op.orderId, COALESCE(SUM(opi.price), 0) AS packageTotal
+                    FROM market_place.orderpackage op
+                    JOIN market_place.orderpackageitems opi ON op.id = opi.orderPackageId
+                    WHERE op.orderId IN (?)
+                    GROUP BY op.orderId
+                  `,
+                  [orderIds],
+                );
+                packageRows.forEach((row) => {
+                  orderIdToPackageTotal[row.orderId] = Number(row.packageTotal) || 0;
+                });
+
+                const additionalRows = await queryAsync(
+                  connection,
+                  `
+                    SELECT oai.orderId, COALESCE(SUM(oai.price), 0) AS additionalTotal
+                    FROM market_place.orderadditionalitems oai
+                    WHERE oai.orderId IN (?)
+                    GROUP BY oai.orderId
+                  `,
+                  [orderIds],
+                );
+                additionalRows.forEach((row) => {
+                  orderIdToAdditionalTotal[row.orderId] = Number(row.additionalTotal) || 0;
+                });
+              }
+
               for (const order of paymentDetails) {
                 const city = orderIdToCity[order.orderId];
                 if (!city) continue;
@@ -1059,9 +1098,14 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 const numericNewCharge = Number(newCharge);
 
                 if (numericNewCharge !== oldCharge) {
-                  // If delivery fee increased (new > old), credit balance should decrease (negative delta).
-                  // If delivery fee decreased (new < old), credit balance should increase (positive delta).
-                  const delta = oldCharge - numericNewCharge;
+                  const packageTotal = orderIdToPackageTotal[order.orderId] || 0;
+                  const additionalTotal = orderIdToAdditionalTotal[order.orderId] || 0;
+                  const couponVal = order.isCoupon ? (Number(order.couponValue) || 0) : 0;
+                  const orderValue = packageTotal + additionalTotal - couponVal;
+
+                  const paidAmount = Number(order.paidAmount) || Number(order.fullTotal) || 0;
+                  const delta = paidAmount - (orderValue + numericNewCharge);
+
                   creditBalanceDeltaByUser[order.userId] =
                     (creditBalanceDeltaByUser[order.userId] || 0) + delta;
 
