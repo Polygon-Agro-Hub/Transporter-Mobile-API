@@ -1059,7 +1059,9 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 const numericNewCharge = Number(newCharge);
 
                 if (numericNewCharge !== oldCharge) {
-                  const delta = numericNewCharge - oldCharge;
+                  // If delivery fee increased (new > old), credit balance should decrease (negative delta).
+                  // If delivery fee decreased (new < old), credit balance should increase (positive delta).
+                  const delta = oldCharge - numericNewCharge;
                   creditBalanceDeltaByUser[order.userId] =
                     (creditBalanceDeltaByUser[order.userId] || 0) + delta;
 
