@@ -364,7 +364,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
       SELECT 
         do.id as driverOrderId,
         do.drvStatus,
-        do.isHandOver,
+        dom.isHandOver,
         do.createdAt as driverOrderCreatedAt,
         
         -- Process Order Details
@@ -420,6 +420,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         oa.city as apartment_city
         
       FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       
       -- Join with processorders
       INNER JOIN market_place.processorders po ON do.orderId = po.id
@@ -449,9 +450,9 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
       LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
       LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
       
-      WHERE do.driverId = ?
+      WHERE dom.driverId = ?
         AND do.drvStatus = 'Return'
-        AND (do.isHandOver = 0 OR do.isHandOver IS NULL)
+        AND (dom.isHandOver = 0 OR dom.isHandOver IS NULL)
         
       ORDER BY do.createdAt DESC, po.id DESC
     `;
@@ -589,15 +590,16 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
         po.invNo,
         po.status as processStatus,
         do.id as driverOrderId,
-        do.driverId,
+        dom.driverId,
         do.drvStatus,
-        do.isHandOver
+        dom.isHandOver
       FROM market_place.processorders po
       INNER JOIN collection_officer.driverorders do ON po.id = do.orderId
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE po.invNo IN (?)
-        AND do.driverId = ?
+        AND dom.driverId = ?
         AND do.drvStatus = 'Return'
-        AND (do.isHandOver = 0 OR do.isHandOver IS NULL)
+        AND (dom.isHandOver = 0 OR dom.isHandOver IS NULL)
     `;
 
     db.collectionofficer.query(
@@ -624,13 +626,14 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
 
         // Step 2: Update driverorders table - set drvStatus to 'Return Received'
         const updateDriverOrdersSql = `
-          UPDATE collection_officer.driverorders 
+          UPDATE collection_officer.driverorders do
+          INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
           SET 
-            drvStatus = 'Return Received',
-            receivedTime = NOW()
-          WHERE id IN (?)
-            AND driverId = ?
-            AND drvStatus = 'Return'
+            do.drvStatus = 'Return Received',
+            do.receivedTime = NOW()
+          WHERE do.id IN (?)
+            AND dom.driverId = ?
+            AND do.drvStatus = 'Return'
         `;
 
         db.collectionofficer.query(
@@ -666,9 +669,10 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
               po.status as processStatus,
               do.id as driverOrderId,
               do.drvStatus,
-              do.isHandOver
+              dom.isHandOver
             FROM market_place.processorders po
             INNER JOIN collection_officer.driverorders do ON po.id = do.orderId
+            INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
             WHERE po.id IN (?)
               AND do.id IN (?)
           `;

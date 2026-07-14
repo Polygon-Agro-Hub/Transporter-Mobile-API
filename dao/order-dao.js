@@ -35,71 +35,109 @@ exports.GetProcessOrderInfoByInvNo = async (invNo) => {
 exports.SaveDriverOrder = async (driverId, processOrderId) => {
   return new Promise(async (resolve, reject) => {
     try {
-      const insertSql = `
-        INSERT IGNORE INTO collection_officer.driverorders
-        (driverId, orderId, drvStatus, isHandOver, createdAt)
-        VALUES (?, ?, 'Todo', 0, NOW())
-      `;
+      db.collectionofficer.getConnection(async (connErr, connection) => {
+        if (connErr) return reject(connErr);
 
-      const insertResult = await new Promise((res, rej) => {
-        db.collectionofficer.query(
-          insertSql,
-          [driverId, processOrderId],
-          (err, result) => {
-            if (err) return rej(err);
+        connection.beginTransaction(async (beginErr) => {
+          if (beginErr) {
+            connection.release();
+            return reject(beginErr);
+          }
 
-            if (result.affectedRows === 0) {
-              return rej(
-                new Error(
-                  "This order has already been assigned to another driver.",
-                ),
+          try {
+            const activeMain = await queryAsync(
+              connection,
+              "SELECT id FROM collection_officer.driverordermain WHERE driverId = ? AND isHandOver = 0 LIMIT 1",
+              [driverId]
+            );
+
+            let mainId;
+            if (activeMain.length > 0) {
+              mainId = activeMain[0].id;
+            } else {
+              const insertMainResult = await queryAsync(
+                connection,
+                "INSERT INTO collection_officer.driverordermain (driverId, isHandOver, createdAt) VALUES (?, 0, NOW())",
+                [driverId]
               );
+              mainId = insertMainResult.insertId;
             }
 
-            res(result);
-          },
-        );
-      });
+            const insertSql = `
+              INSERT IGNORE INTO collection_officer.driverorders
+              (drvOrderMainId, orderId, drvStatus, createdAt)
+              VALUES (?, ?, 'Todo', NOW())
+            `;
 
-      const updateSql = `
-        UPDATE market_place.processorders
-        SET status = 'Collected',
-            isTargetAssigned = 1
-        WHERE id = ?
-      `;
+            const insertResult = await queryAsync(connection, insertSql, [mainId, processOrderId]);
 
-      await new Promise((res, rej) => {
-        db.marketPlace.query(updateSql, [processOrderId], (err, result) => {
-          if (err) return rej(err);
-          res(result);
+            if (insertResult.affectedRows === 0) {
+              return connection.rollback(() => {
+                connection.release();
+                reject(new Error("This order has already been assigned to another driver."));
+              });
+            }
+
+            connection.commit(async (commitErr) => {
+              if (commitErr) {
+                return connection.rollback(() => {
+                  connection.release();
+                  reject(commitErr);
+                });
+              }
+              connection.release();
+
+              try {
+                const updateSql = `
+                  UPDATE market_place.processorders
+                  SET status = 'Collected',
+                      isTargetAssigned = 1
+                  WHERE id = ?
+                `;
+
+                await new Promise((res, rej) => {
+                  db.marketPlace.query(updateSql, [processOrderId], (err, result) => {
+                    if (err) return rej(err);
+                    res(result);
+                  });
+                });
+
+                const notificationSql = `
+                  INSERT INTO market_place.dashnotification
+                  (orderId, readStatus, title, createdAt)
+                  VALUES (?, 0, 'Driver has collected the order', NOW())
+                `;
+
+                await new Promise((res, rej) => {
+                  db.marketPlace.query(
+                    notificationSql,
+                    [processOrderId],
+                    (err, result) => {
+                      if (err) return rej(err);
+                      res(result);
+                    },
+                  );
+                });
+
+                resolve({
+                  message: "Order assigned successfully",
+                  driverOrderId: insertResult.insertId,
+                  processOrderId,
+                  status: "Collected",
+                });
+              } catch (err) {
+                reject(err);
+              }
+            });
+          } catch (txErr) {
+            connection.rollback(() => {
+              connection.release();
+              reject(txErr);
+            });
+          }
         });
       });
-
-      const notificationSql = `
-        INSERT INTO market_place.dashnotification
-        (orderId, readStatus, title, createdAt)
-        VALUES (?, 0, 'Driver has collected the order', NOW())
-      `;
-
-      await new Promise((res, rej) => {
-        db.marketPlace.query(
-          notificationSql,
-          [processOrderId],
-          (err, result) => {
-            if (err) return rej(err);
-            res(result);
-          },
-        );
-      });
-
-      resolve({
-        message: "Order assigned successfully",
-        driverOrderId: insertResult.insertId,
-        processOrderId,
-        status: "Collected",
-      });
     } catch (error) {
-      console.error("Error in SaveDriverOrder:", error.message);
       reject(error);
     }
   });
@@ -111,11 +149,12 @@ exports.CheckOrderAlreadyAssigned = async (processOrderId, driverId) => {
     const sql = `
       SELECT 
           do.id as driverOrderId,
-          do.driverId as assignedDriverId,
+          dom.driverId as assignedDriverId,
           co.empId as assignedDriverEmpId,
           CONCAT(co.firstNameEnglish, ' ', co.lastNameEnglish) as assignedDriverName
       FROM collection_officer.driverorders do
-      INNER JOIN collection_officer.collectionofficer co ON do.driverId = co.id
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
       WHERE do.orderId = ?  -- direct FK match
       LIMIT 1
     `;
@@ -194,7 +233,7 @@ exports.getDriverOrdersDAO = async (
       SELECT 
         do.id as driverOrderId,
         do.drvStatus,
-        do.isHandOver,
+        dom.isHandOver,
         do.createdAt as driverOrderCreatedAt,
         po.deliveredTime AS deliveredTime,
         po.id as processOrderId,
@@ -230,6 +269,7 @@ exports.getDriverOrdersDAO = async (
         u.phoneNumber,
         u.image
       FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       INNER JOIN market_place.processorders po ON do.orderId = po.id
       INNER JOIN market_place.orders o ON po.orderId = o.id
       INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
@@ -247,13 +287,13 @@ exports.getDriverOrdersDAO = async (
                AND dho1.createdAt = dho2.maxCreatedAt
       ) dho ON do.id = dho.drvOrderId
       LEFT JOIN collection_officer.holdreason hr ON dho.holdReasonId = hr.id
-      WHERE do.driverId = ?
+      WHERE dom.driverId = ?
     `;
 
     const params = [driverId];
 
     if (isHandOver !== null && isHandOver !== undefined) {
-      sql += ` AND do.isHandOver = ?`;
+      sql += ` AND dom.isHandOver = ?`;
       params.push(isHandOver);
     }
 
@@ -562,12 +602,13 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         oa.streetName as apartment_streetName,
         oa.city as apartment_city
       FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       INNER JOIN market_place.processorders po ON do.orderId = po.id
       INNER JOIN market_place.orders o ON po.orderId = o.id
       INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
       LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
       LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
-      WHERE do.driverId = ?
+      WHERE dom.driverId = ?
       AND do.orderId IN (?)
       ORDER BY o.id
     `;
@@ -691,9 +732,10 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
         COUNT(*) as ongoingCount,
         GROUP_CONCAT(DISTINCT do.orderId) as ongoingOrderIds
       FROM collection_officer.driverorders do
-      WHERE driverId = ?
-      AND drvStatus = 'On the way'
-      AND isHandOver = 0
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      WHERE dom.driverId = ?
+      AND do.drvStatus = 'On the way'
+      AND dom.isHandOver = 0
     `;
 
     db.collectionofficer.query(
@@ -727,13 +769,14 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
 
         // Update driverorders → set On the way + startTime
         const updateDriverOrdersSql = `
-          UPDATE collection_officer.driverorders
+          UPDATE collection_officer.driverorders do
+          INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
           SET 
-            drvStatus = 'On the way',
-            startTime = CURRENT_TIMESTAMP
-          WHERE driverId = ?
-          AND orderId IN (?)
-          AND isHandOver = 0
+            do.drvStatus = 'On the way',
+            do.startTime = CURRENT_TIMESTAMP
+          WHERE dom.driverId = ?
+          AND do.orderId IN (?)
+          AND dom.isHandOver = 0
         `;
 
         db.collectionofficer.query(
@@ -803,9 +846,10 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                         do.drvStatus,
                         do.startTime AS journeyStartedAt
                       FROM collection_officer.driverorders do
+                      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
                       INNER JOIN market_place.processorders po 
                         ON do.orderId = po.id
-                      WHERE do.driverId = ?
+                      WHERE dom.driverId = ?
                       AND do.orderId IN (?)
                       AND do.drvStatus = 'On the way'
                     `;
@@ -856,10 +900,11 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
   return new Promise((resolve, reject) => {
     const sql = `
       SELECT COUNT(*) as count
-      FROM collection_officer.driverorders 
-      WHERE driverId = ? 
-        AND orderId IN (?)
-        AND drvStatus IN ('Todo', 'On the way', 'Hold')
+      FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      WHERE dom.driverId = ? 
+        AND do.orderId IN (?)
+        AND do.drvStatus IN ('Todo', 'On the way', 'Hold')
     `;
 
     db.collectionofficer.query(
@@ -1399,9 +1444,10 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
   try {
     // Step 1: Get driverorders records for the given orderIds and driverId
     const [driverOrders] = await db.collectionofficer.promise().query(
-      `SELECT id, orderId, drvStatus 
-       FROM driverorders 
-       WHERE driverId = ? AND orderId IN (?)`,
+      `SELECT do.id, do.orderId, do.drvStatus 
+       FROM driverorders do
+       INNER JOIN driverordermain dom ON do.drvOrderMainId = dom.id
+       WHERE dom.driverId = ? AND do.orderId IN (?)`,
       [driverId, orderIds],
     );
 

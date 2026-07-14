@@ -36,17 +36,19 @@ exports.getAmount = async (driverId) => {
         (
           SELECT GROUP_CONCAT(DISTINCT do2.orderId ORDER BY do2.orderId)
           FROM collection_officer.driverorders do2
-          WHERE do2.driverId = ?
+          INNER JOIN collection_officer.driverordermain dom2 ON do2.drvOrderMainId = dom2.id
+          WHERE dom2.driverId = ?
             AND do2.drvStatus = 'On the way'
-            AND do2.isHandOver = 0
+            AND dom2.isHandOver = 0
         ) as ongoingProcessOrderIds
       FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       INNER JOIN market_place.processorders po ON do.orderId = po.id
       INNER JOIN market_place.orders o ON po.orderId = o.id
       WHERE 
-        do.driverId = ?
-        AND do.isHandOver = 0
-      GROUP BY do.driverId;
+        dom.driverId = ?
+        AND dom.isHandOver = 0
+      GROUP BY dom.driverId;
     `;
 
     db.collectionofficer.query(sql, [driverId, driverId], (err, results) => {
@@ -81,13 +83,14 @@ exports.getAmount = async (driverId) => {
         SELECT COUNT(DISTINCT dro.id) as todayReturnOrders
         FROM collection_officer.driverreturnorders dro
         INNER JOIN collection_officer.driverorders do ON dro.drvOrderId = do.id
+        INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
         WHERE 
-          do.driverId = ?
-          AND do.isHandOver = 0
+          dom.driverId = ?
+          AND dom.isHandOver = 0
           AND DATE(CONVERT_TZ(dro.createdAt, '+00:00', '+05:30')) = CURDATE()
           AND do.drvStatus IN ('Return', 'Return Received')
       `;
-
+ 
       db.collectionofficer.query(
         returnSql,
         [driverId],
@@ -101,7 +104,7 @@ exports.getAmount = async (driverId) => {
           } else {
             result.todayReturnOrders = retResults[0]?.todayReturnOrders || 0;
           }
-
+ 
           const allLocationsSql = `
           SELECT 
             locations.locationKey,
@@ -124,12 +127,13 @@ exports.getAmount = async (driverId) => {
               po.id as processOrderId,
               po.orderId as ordersId
             FROM collection_officer.driverorders do
+            INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
             INNER JOIN market_place.processorders po ON do.orderId = po.id
             INNER JOIN market_place.orders o ON po.orderId = o.id
             INNER JOIN market_place.orderhouse oh ON o.id = oh.orderId
             WHERE 
-              do.driverId = ?
-              AND do.isHandOver = 0
+              dom.driverId = ?
+              AND dom.isHandOver = 0
               AND o.buildingType = 'House'
             
             UNION ALL
@@ -139,12 +143,13 @@ exports.getAmount = async (driverId) => {
               po.id as processOrderId,
               po.orderId as ordersId
             FROM collection_officer.driverorders do
+            INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
             INNER JOIN market_place.processorders po ON do.orderId = po.id
             INNER JOIN market_place.orders o ON po.orderId = o.id
             INNER JOIN market_place.orderapartment oa ON o.id = oa.orderId
             WHERE 
-              do.driverId = ?
-              AND do.isHandOver = 0
+              dom.driverId = ?
+              AND dom.isHandOver = 0
               AND o.buildingType = 'Apartment'
           ) as locations
           INNER JOIN collection_officer.driverorders do ON locations.processOrderId = do.orderId
@@ -253,17 +258,19 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
                 po.invNo as invoNo,
                 COALESCE(o.fullTotal, 0) as amount,
                 do.createdAt,
-                do.driverId,
+                dom.driverId,
                 o.id as orderId
             FROM 
                 collection_officer.driverorders do
+            INNER JOIN 
+                collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
             INNER JOIN 
                 market_place.processorders po ON do.orderId = po.id
             INNER JOIN 
                 market_place.orders o ON po.orderId = o.id
             WHERE 
-                do.driverId = ?
-                AND do.isHandOver = 0
+                dom.driverId = ?
+                AND dom.isHandOver = 0
                 AND do.drvStatus = 'Completed'
                 AND o.fullTotal IS NOT NULL
                 AND o.fullTotal > 0
@@ -347,12 +354,14 @@ exports.getOrderAmounts = async (orderIds) => {
       FROM 
         collection_officer.driverorders do
       INNER JOIN 
+        collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      INNER JOIN 
         market_place.processorders po ON do.orderId = po.id
       INNER JOIN 
         market_place.orders o ON po.orderId = o.id
       WHERE 
         do.id IN (?)
-        AND do.isHandOver = 0
+        AND dom.isHandOver = 0
         AND o.fullTotal IS NOT NULL
         AND o.fullTotal > 0
     `;
@@ -369,25 +378,19 @@ exports.getOrderAmounts = async (orderIds) => {
 
 exports.handOverCash = async (orderDetails, officerId) => {
   return new Promise((resolve, reject) => {
-    const caseStatements = orderDetails
-      .map((order) => `WHEN id = ${order.id} THEN ${order.amount}`)
-      .join(" ");
-
     const orderIds = orderDetails.map((order) => order.id);
 
     const sql = `
-      UPDATE collection_officer.driverorders
+      UPDATE collection_officer.driverordermain dom
+      INNER JOIN collection_officer.driverorders do ON dom.id = do.drvOrderMainId
       SET 
-        isHandOver = 1,
-        handOverOfficer = ?,
-        handOverTime = NOW(),
-        handOverPrice = CASE ${caseStatements} END
+        dom.isHandOver = 1
       WHERE 
-        id IN (?)
-        AND isHandOver = 0
+        do.id IN (?)
+        AND dom.isHandOver = 0
     `;
 
-    db.collectionofficer.query(sql, [officerId, orderIds], (err, results) => {
+    db.collectionofficer.query(sql, [orderIds], (err, results) => {
       if (err) {
         console.error("Database error updating hand over:", err.message);
         return reject(new Error("Failed to hand over cash"));
