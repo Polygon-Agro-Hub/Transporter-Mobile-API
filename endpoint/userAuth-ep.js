@@ -266,3 +266,57 @@ exports.updateProfileImage = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Get Driver's Earnings
+exports.getEarnings = asyncHandler(async (req, res) => {
+  const driverId = req.user.id;
+  const { date } = req.query;
+
+  try {
+    const earnings = await userDao.getEarnings(driverId, date);
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "Earnings fetched successfully",
+      data: earnings,
+    });
+  } catch (err) {
+    console.error("Get earnings failed:", err.message);
+    return res.status(500).json({
+      success: false,
+      status: "error",
+      message: "Failed to fetch earnings: " + err.message,
+    });
+  }
+});
+
+// Get Driver's Earnings History
+exports.getEarningsHistory = asyncHandler(async (req, res) => {
+  const driverId = req.user.id;
+  const { from, to } = req.query;
+
+  if (!from || !to) {
+    return res.status(400).json({
+      success: false,
+      status: "error",
+      message: "From date and to date are required",
+    });
+  }
+
+  try {
+    const history = await userDao.getEarningsHistory(driverId, from, to);
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "Earnings history fetched successfully",
+      data: history,
+    });
+  } catch (err) {
+    console.error("Get earnings history failed:", err.message);
+    return res.status(500).json({
+      success: false,
+      status: "error",
+      message: "Failed to fetch earnings history: " + err.message,
+    });
+  }
+});

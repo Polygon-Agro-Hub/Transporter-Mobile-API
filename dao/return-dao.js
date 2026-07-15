@@ -210,27 +210,83 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                           });
                         }
 
-                        const updateDriverOrdersQuery = `
-                          UPDATE collection_officer.driverorders 
-                          SET drvStatus = 'Return'
-                          WHERE id IN (?)
+                        const getPayoutsQuery = `
+                          SELECT 
+                            do.id AS driverOrderId,
+                            dc.payout
+                          FROM collection_officer.driverorders do
+                          INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+                          INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
+                          INNER JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
+                          INNER JOIN collection_officer.drivercategory dc ON dcs.catId = dc.id
+                          WHERE do.id IN (?)
                         `;
 
                         connection.query(
-                          updateDriverOrdersQuery,
+                          getPayoutsQuery,
                           [driverOrderIds],
-                          (error, updateDriverResult) => {
+                          (error, payoutResults) => {
                             if (error) {
                               return connection.rollback(() => {
                                 connection.release();
                                 reject(
                                   new Error(
-                                    "Failed to update driver orders: " +
+                                    "Failed to fetch driver category payouts: " +
                                     error.message,
                                   ),
                                 );
                               });
                             }
+
+                            if (payoutResults.length === 0) {
+                              return connection.rollback(() => {
+                                connection.release();
+                                reject(
+                                  new Error(
+                                    "Could not resolve driver category payout for the given orders.",
+                                  ),
+                                );
+                              });
+                            }
+
+                            const earnPriceByDriverOrderId = {};
+                            payoutResults.forEach((row) => {
+                              const payout = Number(row.payout) || 0;
+                              earnPriceByDriverOrderId[row.driverOrderId] = payout * 0.95;
+                            });
+
+                            const earnPriceCaseParts = driverOrderIds
+                              .map(
+                                (id) =>
+                                  `WHEN ${connection.escape(id)} THEN ${connection.escape(
+                                    earnPriceByDriverOrderId[id] !== undefined ? earnPriceByDriverOrderId[id] : 0,
+                                  )}`,
+                              )
+                              .join(" ");
+
+                            const updateDriverOrdersQuery = `
+                              UPDATE collection_officer.driverorders 
+                              SET 
+                                drvStatus = 'Return',
+                                earnPrice = CASE id ${earnPriceCaseParts} END
+                              WHERE id IN (?)
+                            `;
+
+                            connection.query(
+                              updateDriverOrdersQuery,
+                              [driverOrderIds],
+                              (error, updateDriverResult) => {
+                                if (error) {
+                                  return connection.rollback(() => {
+                                    connection.release();
+                                    reject(
+                                      new Error(
+                                        "Failed to update driver orders: " +
+                                        error.message,
+                                      ),
+                                    );
+                                  });
+                                }
 
                             const insertReturnOrdersQuery = `
                               INSERT INTO collection_officer.driverreturnorders 
@@ -340,6 +396,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                     creditBalanceBreakdown,
                                   });
                                 });
+                               });
                               },
                             );
                           },

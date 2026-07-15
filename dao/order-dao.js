@@ -45,10 +45,11 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
           }
 
           try {
+            // Condition 1: driverId matches AND isHandOver = 0 -> reuse that main row
             const activeMain = await queryAsync(
               connection,
               "SELECT id FROM collection_officer.driverordermain WHERE driverId = ? AND isHandOver = 0 LIMIT 1",
-              [driverId]
+              [driverId],
             );
 
             let mainId;
@@ -58,7 +59,7 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
               const insertMainResult = await queryAsync(
                 connection,
                 "INSERT INTO collection_officer.driverordermain (driverId, isHandOver, createdAt) VALUES (?, 0, NOW())",
-                [driverId]
+                [driverId],
               );
               mainId = insertMainResult.insertId;
             }
@@ -69,12 +70,19 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
               VALUES (?, ?, 'Todo', NOW())
             `;
 
-            const insertResult = await queryAsync(connection, insertSql, [mainId, processOrderId]);
+            const insertResult = await queryAsync(connection, insertSql, [
+              mainId,
+              processOrderId,
+            ]);
 
             if (insertResult.affectedRows === 0) {
               return connection.rollback(() => {
                 connection.release();
-                reject(new Error("This order has already been assigned to another driver."));
+                reject(
+                  new Error(
+                    "This order has already been assigned to another driver.",
+                  ),
+                );
               });
             }
 
@@ -94,12 +102,15 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
                       isTargetAssigned = 1
                   WHERE id = ?
                 `;
-
                 await new Promise((res, rej) => {
-                  db.marketPlace.query(updateSql, [processOrderId], (err, result) => {
-                    if (err) return rej(err);
-                    res(result);
-                  });
+                  db.marketPlace.query(
+                    updateSql,
+                    [processOrderId],
+                    (err, result) => {
+                      if (err) return rej(err);
+                      res(result);
+                    },
+                  );
                 });
 
                 const notificationSql = `
@@ -107,7 +118,6 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
                   (orderId, readStatus, title, createdAt)
                   VALUES (?, 0, 'Driver has collected the order', NOW())
                 `;
-
                 await new Promise((res, rej) => {
                   db.marketPlace.query(
                     notificationSql,
@@ -948,6 +958,39 @@ function queryAsync(connection, sql, params) {
   });
 }
 
+exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT COUNT(*) as count
+      FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      WHERE dom.driverId = ? 
+        AND do.orderId IN (?)
+        AND do.drvStatus IN ('Todo', 'On the way', 'Hold')
+    `;
+
+    db.collectionofficer.query(
+      sql,
+      [driverId, processOrderIds],
+      (err, results) => {
+        if (err) {
+          console.error("Error verifying driver access:", err.message);
+          return reject(new Error("Failed to verify driver access"));
+        }
+
+        const accessibleCount = results[0].count;
+        const totalRequested = processOrderIds.length;
+
+        resolve({
+          hasAccess: accessibleCount === totalRequested,
+          accessibleCount: accessibleCount,
+          totalRequested: totalRequested,
+        });
+      },
+    );
+  });
+};
+
 exports.saveSignatureAndUpdateStatusDAO = async (
   processOrderIds,
   signaturePath,
@@ -1091,7 +1134,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               const creditBalanceDeltaByUser = {};
               const deliveryChargeCorrections = [];
 
-              // Query package totals and additional totals for these orders
               const orderIds = paymentDetails.map((o) => o.orderId);
               const orderIdToPackageTotal = {};
               const orderIdToAdditionalTotal = {};
@@ -1109,7 +1151,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   [orderIds],
                 );
                 packageRows.forEach((row) => {
-                  orderIdToPackageTotal[row.orderId] = Number(row.packageTotal) || 0;
+                  orderIdToPackageTotal[row.orderId] =
+                    Number(row.packageTotal) || 0;
                 });
 
                 const additionalRows = await queryAsync(
@@ -1123,7 +1166,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   [orderIds],
                 );
                 additionalRows.forEach((row) => {
-                  orderIdToAdditionalTotal[row.orderId] = Number(row.additionalTotal) || 0;
+                  orderIdToAdditionalTotal[row.orderId] =
+                    Number(row.additionalTotal) || 0;
                 });
               }
 
@@ -1143,12 +1187,17 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 const numericNewCharge = Number(newCharge);
 
                 if (numericNewCharge !== oldCharge) {
-                  const packageTotal = orderIdToPackageTotal[order.orderId] || 0;
-                  const additionalTotal = orderIdToAdditionalTotal[order.orderId] || 0;
-                  const couponVal = order.isCoupon ? (Number(order.couponValue) || 0) : 0;
+                  const packageTotal =
+                    orderIdToPackageTotal[order.orderId] || 0;
+                  const additionalTotal =
+                    orderIdToAdditionalTotal[order.orderId] || 0;
+                  const couponVal = order.isCoupon
+                    ? Number(order.couponValue) || 0
+                    : 0;
                   const orderValue = packageTotal + additionalTotal - couponVal;
 
-                  const paidAmount = Number(order.paidAmount) || Number(order.fullTotal) || 0;
+                  const paidAmount =
+                    Number(order.paidAmount) || Number(order.fullTotal) || 0;
                   const delta = paidAmount - (orderValue + numericNewCharge);
 
                   creditBalanceDeltaByUser[order.userId] =
@@ -1165,18 +1214,74 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 }
               }
 
-              // 1. Update driverorders
+              const earnPriceInfoQuery = `
+                SELECT 
+                  do.id AS driverOrderId,
+                  do.orderId,
+                  do.drvOrderMainId,
+                  dc.payout
+                FROM collection_officer.driverorders do
+                INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+                INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
+                INNER JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
+                INNER JOIN collection_officer.drivercategory dc ON dcs.catId = dc.id
+                WHERE do.orderId IN (?)
+              `;
+
+              const earnPriceRows = await queryAsync(
+                connection,
+                earnPriceInfoQuery,
+                [processOrderIds],
+              );
+
+              if (earnPriceRows.length === 0) {
+                connection.rollback(() => {
+                  connection.release();
+                });
+                console.error(
+                  "[saveSignatureAndUpdateStatusDAO] Could not resolve driver category payout for orders:",
+                  processOrderIds,
+                );
+                reject(
+                  new Error(
+                    "Could not resolve driver category payout for the given orders.",
+                  ),
+                );
+                return;
+              }
+
+              // Assign earnPrice directly from the driver's category payout
+              const earnPriceByDriverOrderId = {};
+
+              for (const row of earnPriceRows) {
+                earnPriceByDriverOrderId[row.driverOrderId] = Number(
+                  row.payout,
+                );
+              }
+
+              const driverOrderIds = Object.keys(earnPriceByDriverOrderId);
+
+              const earnPriceCaseParts = driverOrderIds
+                .map(
+                  (id) =>
+                    `WHEN ${connection.escape(id)} THEN ${connection.escape(
+                      earnPriceByDriverOrderId[id],
+                    )}`,
+                )
+                .join(" ");
+
               const updateDriverOrdersQuery = `
                 UPDATE collection_officer.driverorders 
                 SET 
                   signature = ?,
-                  drvStatus = 'Completed'
-                WHERE orderId IN (?)
+                  drvStatus = 'Completed',
+                  earnPrice = CASE id ${earnPriceCaseParts} END
+                WHERE id IN (?)
               `;
 
               connection.query(
                 updateDriverOrdersQuery,
-                [signaturePath, processOrderIds],
+                [signaturePath, driverOrderIds],
                 (queryErr1, result1) => {
                   if (queryErr1) {
                     return connection.rollback(() => {
@@ -1239,7 +1344,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     );
                   }
 
-                  // 4. NEW: correct orders.deliveryCharge to the recalculated value
+                  // 4. Correct orders.deliveryCharge to the recalculated value
                   deliveryChargeCorrections.forEach(
                     ({ orderId, correctDeliveryCharge }) => {
                       updatePromises.push(
@@ -1277,6 +1382,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     },
                   );
 
+                  // 5. Credit balance corrections
                   Object.entries(creditBalanceDeltaByUser).forEach(
                     ([userId, delta]) => {
                       if (delta === 0) return;
@@ -1387,6 +1493,13 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                                 changedRows: r.changedRows,
                               }));
 
+                            const earnPriceUpdateResults = driverOrderIds.map(
+                              (id) => ({
+                                driverOrderId: Number(id),
+                                earnPrice: earnPriceByDriverOrderId[id],
+                              }),
+                            );
+
                             resolve({
                               driverOrdersUpdated: result1.affectedRows,
                               processOrdersUpdated:
@@ -1399,6 +1512,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                               deliveryChargeCorrections,
                               creditBalanceUpdateResults,
                               deliveryChargeUpdateResults,
+                              earnPriceUpdateResults,
                             });
                           },
                         );
@@ -1422,12 +1536,12 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 connection.release();
               });
               console.error(
-                "Error during delivery-charge reconciliation:",
+                "Error during delivery-charge/earnPrice reconciliation:",
                 asyncErr,
               );
               reject(
                 new Error(
-                  `Failed to reconcile delivery charges: ${asyncErr.message}`,
+                  `Failed to reconcile order updates: ${asyncErr.message}`,
                 ),
               );
               return;
