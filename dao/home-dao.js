@@ -237,9 +237,27 @@ exports.getAmount = async (driverId) => {
               result.todayCompletedLocationsCount =
                 todayCompletedLocationsCount;
 
-              resolve({
-                ...result,
-                ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
+              const txSql = `
+                SELECT tx.transStatus 
+                FROM collection_officer.driverordertransaction tx
+                INNER JOIN collection_officer.driverordermain dom ON tx.drvOrderMainId = dom.id
+                WHERE dom.driverId = ? AND dom.isHandOver = 0
+                ORDER BY tx.createdAt DESC
+                LIMIT 1
+              `;
+
+              db.collectionofficer.query(txSql, [driverId], (txErr, txResults) => {
+                if (txErr) {
+                  console.error("Database error fetching transaction status:", txErr.message);
+                  result.activeTransactionStatus = null;
+                } else {
+                  result.activeTransactionStatus = txResults.length > 0 ? txResults[0].transStatus : null;
+                }
+
+                resolve({
+                  ...result,
+                  ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
+                });
               });
             },
           );
@@ -257,6 +275,7 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
                 do.orderId as processOrderId,
                 po.invNo as invoNo,
                 COALESCE(o.fullTotal, 0) as amount,
+                COALESCE(do.earnPrice, 0) as earned,
                 do.createdAt,
                 dom.driverId,
                 o.id as orderId
@@ -293,6 +312,7 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
           orderId: item.processOrderId,
           invoNo: item.invoNo,
           amount: parseFloat(item.amount) || 0,
+          earned: parseFloat(item.earned) || 0,
           selected: false,
           createdAt: item.createdAt,
         }));
@@ -420,6 +440,120 @@ exports.getOfficerByEmpId = async (empId) => {
         return reject(new Error("Failed to retrieve officer"));
       }
       resolve(results.length > 0 ? results[0] : null);
+    });
+  });
+};
+
+exports.getActiveOrderMainId = async (driverId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT id FROM collection_officer.driverordermain 
+      WHERE driverId = ? AND isHandOver = 0 
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql, [driverId], (err, results) => {
+      if (err) return reject(err);
+      resolve(results.length > 0 ? results[0].id : null);
+    });
+  });
+};
+
+exports.createTransaction = async (drvOrderMainId, transCode, transAmount, paySlip) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      INSERT INTO collection_officer.driverordertransaction 
+      (drvOrderMainId, transCode, transAmount, paySlip, transStatus) 
+      VALUES (?, ?, ?, ?, 'To Review')
+    `;
+    db.collectionofficer.query(sql, [drvOrderMainId, transCode, transAmount, paySlip], (err, results) => {
+      if (err) return reject(err);
+      resolve(results.insertId);
+    });
+  });
+};
+
+exports.getLatestTransactionStatus = async (driverId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT tx.id, tx.transCode, tx.transAmount, tx.paySlip, tx.transStatus, tx.createdAt 
+      FROM collection_officer.driverordertransaction tx
+      INNER JOIN collection_officer.driverordermain dom ON tx.drvOrderMainId = dom.id
+      WHERE dom.driverId = ? AND dom.isHandOver = 0
+      ORDER BY tx.createdAt DESC
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql, [driverId], (err, results) => {
+      if (err) return reject(err);
+      resolve(results.length > 0 ? results[0] : null);
+    });
+  });
+};
+
+exports.updateTransactionStatus = async (transactionId, status) => {
+  return new Promise((resolve, reject) => {
+    db.collectionofficer.beginTransaction((err) => {
+      if (err) return reject(err);
+
+      const updateTxSql = `
+        UPDATE collection_officer.driverordertransaction
+        SET transStatus = ?
+        WHERE id = ?
+      `;
+
+      db.collectionofficer.query(updateTxSql, [status, transactionId], (err, results) => {
+        if (err) {
+          return db.collectionofficer.rollback(() => reject(err));
+        }
+
+        if (status === "Approved") {
+          const getTxSql = `
+            SELECT drvOrderMainId FROM collection_officer.driverordertransaction WHERE id = ?
+          `;
+
+          db.collectionofficer.query(getTxSql, [transactionId], (err, txResults) => {
+            if (err) {
+              return db.collectionofficer.rollback(() => reject(err));
+            }
+
+            if (txResults.length > 0) {
+              const drvOrderMainId = txResults[0].drvOrderMainId;
+
+              const updateMainSql = `
+                UPDATE collection_officer.driverordermain
+                SET isHandOver = 1
+                WHERE id = ?
+              `;
+
+              db.collectionofficer.query(updateMainSql, [drvOrderMainId], (err, mainResults) => {
+                if (err) {
+                  return db.collectionofficer.rollback(() => reject(err));
+                }
+
+                db.collectionofficer.commit((err) => {
+                  if (err) {
+                    return db.collectionofficer.rollback(() => reject(err));
+                  }
+                  resolve({ transactionId, status, isHandOverUpdated: true });
+                });
+              });
+            } else {
+              db.collectionofficer.commit((err) => {
+                if (err) {
+                  return db.collectionofficer.rollback(() => reject(err));
+                }
+                resolve({ transactionId, status, isHandOverUpdated: false });
+              });
+            }
+          });
+        } else {
+          db.collectionofficer.commit((err) => {
+            if (err) {
+              return db.collectionofficer.rollback(() => reject(err));
+            }
+            resolve({ transactionId, status, isHandOverUpdated: false });
+          });
+        }
+      });
     });
   });
 };

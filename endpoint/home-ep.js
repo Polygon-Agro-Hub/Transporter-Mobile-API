@@ -1,5 +1,6 @@
 const homeDao = require("../dao/home-dao");
 const asyncHandler = require("express-async-handler");
+const uploadFileToS3 = require("../middlewares/s3upload");
 
 exports.getAmount = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
@@ -253,3 +254,97 @@ exports.getOfficerDetails = asyncHandler(async (req, res) => {
     });
   }
 });
+
+exports.uploadTransferSlip = asyncHandler(async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      status: "error",
+      message: "Bank transfer slip is required",
+    });
+  }
+
+  const { amount } = req.body;
+  if (!amount || isNaN(parseFloat(amount))) {
+    return res.status(400).json({
+      status: "error",
+      message: "Valid transfer amount is required",
+    });
+  }
+
+  const driverId = req.user.id;
+
+  try {
+    const drvOrderMainId = await homeDao.getActiveOrderMainId(driverId);
+    if (!drvOrderMainId) {
+      return res.status(400).json({
+        status: "error",
+        message: "No active delivery shift found to hand over cash.",
+      });
+    }
+
+    const fileBuffer = req.file.buffer;
+    const fileName = req.file.originalname;
+    const keyPrefix = "rider/transfer-slips";
+    const imageUrl = await uploadFileToS3(fileBuffer, fileName, keyPrefix);
+
+    const empId = req.user.empId || "";
+    const empIdDigits = empId.replace(/\D/g, "") || String(driverId).padStart(5, "0");
+    const now = new Date();
+    const yy = String(now.getFullYear()).substring(2);
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const dateStr = `${yy}${mm}${dd}`;
+    const transCode = `D${empIdDigits}${dateStr}01`;
+
+    const transactionId = await homeDao.createTransaction(
+      drvOrderMainId,
+      transCode,
+      parseFloat(amount),
+      imageUrl
+    );
+
+    res.status(200).json({
+      status: "success",
+      message: "Slip uploaded successfully. Transaction is pending review.",
+      data: {
+        transactionId,
+        transCode,
+        amount: parseFloat(amount),
+        paySlip: imageUrl,
+      },
+    });
+  } catch (error) {
+    console.error("Error uploading transfer slip:", error.message);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to upload transfer slip: " + error.message,
+    });
+  }
+});
+
+exports.getLatestTransactionStatus = asyncHandler(async (req, res) => {
+  const driverId = req.user.id;
+
+  try {
+    const tx = await homeDao.getLatestTransactionStatus(driverId);
+    if (!tx) {
+      return res.status(404).json({
+        status: "error",
+        message: "No transactions found for the active shift.",
+      });
+    }
+
+    res.status(200).json({
+      status: "success",
+      message: "Transaction status fetched successfully",
+      data: tx,
+    });
+  } catch (error) {
+    console.error("Error fetching latest transaction status:", error.message);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to fetch transaction status: " + error.message,
+    });
+  }
+});
+
