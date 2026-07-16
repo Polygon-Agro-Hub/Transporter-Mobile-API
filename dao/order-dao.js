@@ -906,39 +906,6 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
   });
 };
 
-exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
-  return new Promise((resolve, reject) => {
-    const sql = `
-      SELECT COUNT(*) as count
-      FROM collection_officer.driverorders do
-      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-      WHERE dom.driverId = ? 
-        AND do.orderId IN (?)
-        AND do.drvStatus IN ('Todo', 'On the way', 'Hold')
-    `;
-
-    db.collectionofficer.query(
-      sql,
-      [driverId, processOrderIds],
-      (err, results) => {
-        if (err) {
-          console.error("Error verifying driver access:", err.message);
-          return reject(new Error("Failed to verify driver access"));
-        }
-
-        const accessibleCount = results[0].count;
-        const totalRequested = processOrderIds.length;
-
-        resolve({
-          hasAccess: accessibleCount === totalRequested,
-          accessibleCount: accessibleCount,
-          totalRequested: totalRequested,
-        });
-      },
-    );
-  });
-};
-
 const HOUSE_VALUES = ["house"];
 const APARTMENT_VALUES = ["apartment", "flat"];
 
@@ -964,7 +931,7 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
       SELECT COUNT(*) as count
       FROM collection_officer.driverorders do
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-      WHERE dom.driverId = ? 
+      WHERE dom.driverId = ?
         AND do.orderId IN (?)
         AND do.drvStatus IN ('Todo', 'On the way', 'Hold')
     `;
@@ -983,8 +950,8 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
 
         resolve({
           hasAccess: accessibleCount === totalRequested,
-          accessibleCount: accessibleCount,
-          totalRequested: totalRequested,
+          accessibleCount,
+          totalRequested,
         });
       },
     );
@@ -1021,6 +988,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             po.paymentMethod,
             po.orderId,
             po.amount AS paidAmount,
+            po.creditPaid,
             o.fullTotal,
             o.userId,
             o.deliveryCharge AS currentDeliveryCharge,
@@ -1052,13 +1020,11 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             }
 
             try {
-              const payableOrders = paymentDetails.filter(
-                (order) =>
-                  order.paymentMethod === "Cash" ||
-                  order.paymentMethod === "Card",
+              const cashOrders = paymentDetails.filter(
+                (order) => order.paymentMethod === "Cash",
               );
-              const payableOrderIds = payableOrders.map(
-                (order) => order.processOrderId,
+              const cardOrders = paymentDetails.filter(
+                (order) => order.paymentMethod === "Card",
               );
 
               const houseOrderIds = [];
@@ -1131,54 +1097,48 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 });
               }
 
-              const creditBalanceDeltaByUser = {};
-              const deliveryChargeCorrections = [];
+              const cashOrderUpdates = [];
 
-              const orderIds = paymentDetails.map((o) => o.orderId);
-              const orderIdToPackageTotal = {};
-              const orderIdToAdditionalTotal = {};
+              for (const order of cashOrders) {
+                const orderValue =
+                  (Number(order.fullTotal) || 0) -
+                  (Number(order.currentDeliveryCharge) || 0);
 
-              if (orderIds.length > 0) {
-                const packageRows = await queryAsync(
-                  connection,
-                  `
-                    SELECT op.orderId, COALESCE(SUM(opi.price), 0) AS packageTotal
-                    FROM market_place.orderpackage op
-                    JOIN market_place.orderpackageitems opi ON op.id = opi.orderPackageId
-                    WHERE op.orderId IN (?)
-                    GROUP BY op.orderId
-                  `,
-                  [orderIds],
-                );
-                packageRows.forEach((row) => {
-                  orderIdToPackageTotal[row.orderId] =
-                    Number(row.packageTotal) || 0;
-                });
+                const city = orderIdToCity[order.orderId];
+                const cityCharge = city ? cityToCharge[city] : undefined;
 
-                const additionalRows = await queryAsync(
-                  connection,
-                  `
-                    SELECT oai.orderId, COALESCE(SUM(oai.price), 0) AS additionalTotal
-                    FROM market_place.orderadditionalitems oai
-                    WHERE oai.orderId IN (?)
-                    GROUP BY oai.orderId
-                  `,
-                  [orderIds],
-                );
-                additionalRows.forEach((row) => {
-                  orderIdToAdditionalTotal[row.orderId] =
-                    Number(row.additionalTotal) || 0;
+                const newDeliveryCharge =
+                  cityCharge !== undefined
+                    ? Number(cityCharge)
+                    : Number(order.currentDeliveryCharge) || 0;
+
+                const creditPaid = Number(order.creditPaid) || 0;
+                const totalDue = orderValue + newDeliveryCharge;
+
+                const amount = totalDue;
+                const moneyPaid =
+                  creditPaid > 0 ? totalDue - creditPaid : totalDue;
+
+                cashOrderUpdates.push({
+                  processOrderId: order.processOrderId,
+                  orderId: order.orderId,
+                  amount,
+                  moneyPaid,
+                  newDeliveryCharge,
                 });
               }
 
-              for (const order of paymentDetails) {
+              const creditBalanceDeltaByUser = {};
+              const cardDeliveryChargeCorrections = [];
+
+              for (const order of cardOrders) {
                 const city = orderIdToCity[order.orderId];
                 if (!city) continue;
 
                 const newCharge = cityToCharge[city];
                 if (newCharge === undefined) {
                   console.warn(
-                    `[saveSignatureAndUpdateStatusDAO] No deliverycharge entry for city "${city}" (orderId ${order.orderId}) — skipping.`,
+                    `[saveSignatureAndUpdateStatusDAO] No deliverycharge entry for city "${city}" (orderId ${order.orderId}) — skipping Card correction.`,
                   );
                   continue;
                 }
@@ -1186,36 +1146,25 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 const oldCharge = Number(order.currentDeliveryCharge) || 0;
                 const numericNewCharge = Number(newCharge);
 
-                if (numericNewCharge !== oldCharge) {
-                  const packageTotal =
-                    orderIdToPackageTotal[order.orderId] || 0;
-                  const additionalTotal =
-                    orderIdToAdditionalTotal[order.orderId] || 0;
-                  const couponVal = order.isCoupon
-                    ? Number(order.couponValue) || 0
-                    : 0;
-                  const orderValue = packageTotal + additionalTotal - couponVal;
+                if (numericNewCharge === oldCharge) continue;
 
-                  const paidAmount =
-                    Number(order.paidAmount) || Number(order.fullTotal) || 0;
-                  const delta = paidAmount - (orderValue + numericNewCharge);
+                const delta = oldCharge - numericNewCharge;
 
-                  creditBalanceDeltaByUser[order.userId] =
-                    (creditBalanceDeltaByUser[order.userId] || 0) + delta;
+                creditBalanceDeltaByUser[order.userId] =
+                  (creditBalanceDeltaByUser[order.userId] || 0) + delta;
 
-                  deliveryChargeCorrections.push({
-                    orderId: order.orderId,
-                    userId: order.userId,
-                    city,
-                    storedOrderDeliveryCharge: oldCharge,
-                    correctDeliveryCharge: numericNewCharge,
-                    creditBalanceDelta: delta,
-                  });
-                }
+                cardDeliveryChargeCorrections.push({
+                  orderId: order.orderId,
+                  userId: order.userId,
+                  city,
+                  storedOrderDeliveryCharge: oldCharge,
+                  correctDeliveryCharge: numericNewCharge,
+                  creditBalanceDelta: delta,
+                });
               }
 
               const earnPriceInfoQuery = `
-                SELECT 
+                SELECT
                   do.id AS driverOrderId,
                   do.orderId,
                   do.drvOrderMainId,
@@ -1250,9 +1199,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 return;
               }
 
-              // Assign earnPrice directly from the driver's category payout
               const earnPriceByDriverOrderId = {};
-
               for (const row of earnPriceRows) {
                 earnPriceByDriverOrderId[row.driverOrderId] = Number(
                   row.payout,
@@ -1271,8 +1218,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 .join(" ");
 
               const updateDriverOrdersQuery = `
-                UPDATE collection_officer.driverorders 
-                SET 
+                UPDATE collection_officer.driverorders
+                SET
                   signature = ?,
                   drvStatus = 'Completed',
                   earnPrice = CASE id ${earnPriceCaseParts} END
@@ -1295,12 +1242,12 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     });
                   }
 
-                  let updatePromises = [];
+                  const updatePromises = [];
 
-                  // 2. Update processorders: Delivered + deliveredTime + GPS
+                  // Mark all process orders delivered
                   const updateAllOrdersStatusQuery = `
-                    UPDATE market_place.processorders 
-                    SET 
+                    UPDATE market_place.processorders
+                    SET
                       status = 'Delivered',
                       deliveredTime = CURRENT_TIMESTAMP,
                       deliveredLatitude = ?,
@@ -1321,8 +1268,100 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     }),
                   );
 
-                  // 3. Cash + Card orders: mark paid
-                  if (payableOrderIds.length > 0) {
+                  // CASH: isPaid / amount / moneyPaid via CASE
+                  if (cashOrderUpdates.length > 0) {
+                    const cashProcessOrderIds = cashOrderUpdates.map(
+                      (u) => u.processOrderId,
+                    );
+
+                    const amountCaseParts = cashOrderUpdates
+                      .map(
+                        (u) =>
+                          `WHEN ${connection.escape(
+                            u.processOrderId,
+                          )} THEN ${connection.escape(u.amount)}`,
+                      )
+                      .join(" ");
+
+                    const moneyPaidCaseParts = cashOrderUpdates
+                      .map(
+                        (u) =>
+                          `WHEN ${connection.escape(
+                            u.processOrderId,
+                          )} THEN ${connection.escape(u.moneyPaid)}`,
+                      )
+                      .join(" ");
+
+                    const updateCashOrdersQuery = `
+                      UPDATE market_place.processorders
+                      SET
+                        isPaid = 1,
+                        amount = CASE id ${amountCaseParts} END,
+                        moneyPaid = CASE id ${moneyPaidCaseParts} END
+                      WHERE id IN (?)
+                    `;
+
+                    updatePromises.push(
+                      new Promise((resolve, reject) => {
+                        connection.query(
+                          updateCashOrdersQuery,
+                          [cashProcessOrderIds],
+                          (err, result) => {
+                            if (err) {
+                              console.error(
+                                "[cash payment update] FAILED:",
+                                err.message,
+                              );
+                              return reject(err);
+                            }
+                            resolve({ type: "cashPayment", result });
+                          },
+                        );
+                      }),
+                    );
+
+                    // Cash: orders.deliveryCharge -> today's rate
+                    cashOrderUpdates.forEach(
+                      ({ orderId, newDeliveryCharge }) => {
+                        updatePromises.push(
+                          new Promise((resolve, reject) => {
+                            connection.query(
+                              `UPDATE market_place.orders SET deliveryCharge = ? WHERE id = ?`,
+                              [newDeliveryCharge, orderId],
+                              (err, result) => {
+                                if (err) {
+                                  console.error(
+                                    `[cash deliveryCharge update] FAILED for orderId ${orderId}:`,
+                                    err.message,
+                                  );
+                                  return reject(err);
+                                }
+                                if (result.affectedRows === 0) {
+                                  console.warn(
+                                    `[cash deliveryCharge update] ⚠️ No row matched for orders.id = ${orderId}.`,
+                                  );
+                                }
+                                resolve({
+                                  type: "deliveryCharge",
+                                  orderId,
+                                  newCharge: newDeliveryCharge,
+                                  affectedRows: result.affectedRows,
+                                  changedRows: result.changedRows,
+                                  result,
+                                });
+                              },
+                            );
+                          }),
+                        );
+                      },
+                    );
+                  }
+
+                  // CARD: mark paid using original fullTotal (unchanged)
+                  if (cardOrders.length > 0) {
+                    const cardOrderIds = cardOrders.map(
+                      (o) => o.processOrderId,
+                    );
                     const updatePayableOrdersQuery = `
                       UPDATE market_place.processorders po
                       JOIN market_place.orders o ON po.orderId = o.id
@@ -1334,7 +1373,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       new Promise((resolve, reject) => {
                         connection.query(
                           updatePayableOrdersQuery,
-                          [payableOrderIds],
+                          [cardOrderIds],
                           (err, result) => {
                             if (err) reject(err);
                             else resolve({ type: "payable", result });
@@ -1344,8 +1383,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     );
                   }
 
-                  // 4. Correct orders.deliveryCharge to the recalculated value
-                  deliveryChargeCorrections.forEach(
+                  // CARD: orders.deliveryCharge -> today's rate
+                  cardDeliveryChargeCorrections.forEach(
                     ({ orderId, correctDeliveryCharge }) => {
                       updatePromises.push(
                         new Promise((resolve, reject) => {
@@ -1355,18 +1394,16 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                             (err, result) => {
                               if (err) {
                                 console.error(
-                                  `[deliveryCharge update] FAILED for orderId ${orderId}:`,
+                                  `[Card deliveryCharge update] FAILED for orderId ${orderId}:`,
                                   err.message,
                                 );
                                 return reject(err);
                               }
-
                               if (result.affectedRows === 0) {
                                 console.warn(
-                                  `[deliveryCharge update] ⚠️ No row matched for orders.id = ${orderId} — deliveryCharge was NOT updated.`,
+                                  `[Card deliveryCharge update] ⚠️ No row matched for orders.id = ${orderId} — deliveryCharge was NOT updated.`,
                                 );
                               }
-
                               resolve({
                                 type: "deliveryCharge",
                                 orderId,
@@ -1382,11 +1419,10 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     },
                   );
 
-                  // 5. Credit balance corrections
+                  // CARD: creditBalance += (oldCharge - newCharge) per user
                   Object.entries(creditBalanceDeltaByUser).forEach(
                     ([userId, delta]) => {
                       if (delta === 0) return;
-
                       const numericUserId = Number(userId);
 
                       updatePromises.push(
@@ -1402,13 +1438,11 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                                 );
                                 return reject(err);
                               }
-
                               if (result.affectedRows === 0) {
                                 console.warn(
                                   `[creditBalance update] ⚠️ No row matched for marketplaceusers.id = ${numericUserId} — creditBalance was NOT updated.`,
                                 );
                               }
-
                               resolve({
                                 type: "creditBalance",
                                 userId: numericUserId,
@@ -1471,6 +1505,10 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                               (r) => r.type === "status",
                             )?.result;
 
+                            const cashPaymentUpdateResult = results.find(
+                              (r) => r.type === "cashPayment",
+                            )?.result;
+
                             const payableUpdateResult = results.find(
                               (r) => r.type === "payable",
                             )?.result;
@@ -1504,12 +1542,18 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                               driverOrdersUpdated: result1.affectedRows,
                               processOrdersUpdated:
                                 statusUpdateResult?.affectedRows || 0,
-                              payableOrdersUpdated:
+                              cashOrdersUpdated:
+                                cashPaymentUpdateResult?.affectedRows || 0,
+                              cardOrdersUpdated:
                                 payableUpdateResult?.affectedRows || 0,
                               signatureUrl: signaturePath,
                               totalOrders: processOrderIds.length,
-                              payableOrdersCount: payableOrderIds.length,
-                              deliveryChargeCorrections,
+                              cashOrdersCount: cashOrders.length,
+                              cashOrderBreakdown: cashOrderUpdates,
+                              cardOrdersCount: cardOrders.length,
+
+                              deliveryChargeCorrections:
+                                cardDeliveryChargeCorrections,
                               creditBalanceUpdateResults,
                               deliveryChargeUpdateResults,
                               earnPriceUpdateResults,

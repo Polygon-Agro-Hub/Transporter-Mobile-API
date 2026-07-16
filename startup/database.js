@@ -20,10 +20,10 @@ const createPool = (database) => {
     enableKeepAlive: true,
     keepAliveInitialDelay: 0,
   });
-  
+
   // Track the pool for cleanup
   pools.push(pool);
-  
+
   return pool;
 };
 
@@ -45,7 +45,7 @@ const closeAllPools = async () => {
       });
     });
   });
-  
+
   await Promise.all(closePromises);
   // Clear the pools array
   pools.length = 0;
@@ -68,10 +68,10 @@ const closePool = async (pool) => {
   });
 };
 
-module.exports = { 
-  plantcare, 
-  collectionofficer, 
-  marketPlace, 
+module.exports = {
+  plantcare,
+  collectionofficer,
+  marketPlace,
   admin,
   closeAllPools,
   closePool
