@@ -581,7 +581,7 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         u.phoneNumber,
         u.image,
         o.fullName as billingName,
-        o.title as billingTitle, -- Already selected
+        o.title as billingTitle,
         o.phonecode1 as billingPhoneCode,
         o.phone1 as billingPhone,
         o.phonecode2 as billingPhoneCode2,  
@@ -598,12 +598,11 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         po.invNo,
         po.paymentMethod,
         po.isPaid,
-        do.drvStatus as status, -- Get status from driverorders table
-        -- House address
+        po.creditPaid,                 -- ✅ ADDED
+        do.drvStatus as status,
         oh.houseNo as house_houseNo,
         oh.streetName as house_streetName,
         oh.city as house_city,
-        -- Apartment address
         oa.buildingNo as apartment_buildingNo,
         oa.buildingName as apartment_buildingName,
         oa.unitNo as apartment_unitNo,
@@ -625,7 +624,7 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
 
     const params = [driverId, processOrderIds];
 
-    db.collectionofficer.query(sql, params, (err, results) => {
+    db.collectionofficer.query(sql, params, async (err, results) => {
       if (err) {
         console.error(
           "Database error fetching order user details:",
@@ -640,7 +639,6 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
 
       const firstRow = results[0];
 
-      // Helper function to format House address
       const formatHouseAddress = (row) => {
         const parts = [];
         if (row.house_houseNo) parts.push(`House.No ${row.house_houseNo}`);
@@ -650,7 +648,6 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         return parts.length > 0 ? parts.join(", ") : "Address not specified";
       };
 
-      // Helper function to format Apartment address
       const formatApartmentAddress = (row) => {
         const parts = [];
         if (row.apartment_buildingNo)
@@ -669,7 +666,6 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         return parts.length > 0 ? parts.join(", ") : "Address not specified";
       };
 
-      // Format user address based on building type
       let userAddress = "Address not specified";
       if (firstRow.buildingType === "House") {
         userAddress = formatHouseAddress(firstRow);
@@ -696,39 +692,90 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         deliveryMethod: firstRow.delivaryMethod,
       };
 
-      const orders = results.map((row) => {
-        // Format order-specific address
-        let orderAddress = "Address not specified";
-        if (row.buildingType === "House") {
-          orderAddress = formatHouseAddress(row);
-        } else if (row.buildingType === "Apartment") {
-          orderAddress = formatApartmentAddress(row);
+      try {
+        const rowCity = (row) => {
+          if (row.buildingType === "House") return row.house_city;
+          if (row.buildingType === "Apartment") return row.apartment_city;
+          return null;
+        };
+
+        const cities = [...new Set(results.map(rowCity).filter(Boolean))];
+        const cityToCharge = {};
+
+        if (cities.length > 0) {
+          const chargeRows = await new Promise((res, rej) => {
+            db.collectionofficer.query(
+              `SELECT city, charge FROM collection_officer.deliverycharge WHERE city IN (?)`,
+              [cities],
+              (err, rows) => (err ? rej(err) : res(rows)),
+            );
+          });
+
+          chargeRows.forEach((r) => {
+            if (cityToCharge[r.city] === undefined) {
+              cityToCharge[r.city] = r.charge;
+            }
+          });
         }
 
-        return {
-          orderId: row.orderId,
-          sheduleTime: row.sheduleTime,
-          fullName: row.billingName,
-          title: row.billingTitle, // Add title to order object
-          phonecode1: row.billingPhoneCode,
-          phone1: row.billingPhone,
-          phonecode2: row.billingPhoneCode2,
-          phone2: row.billingPhone2,
-          longitude: row.longitude,
-          latitude: row.latitude,
-          address: orderAddress,
-          processOrder: {
-            id: row.processOrderId,
-            invNo: row.invNo,
-            paymentMethod: row.paymentMethod,
-            isPaid: row.isPaid === 1,
-            status: row.status, // Now using drvStatus from driverorders table
-          },
-          pricing: row.fullTotal,
-        };
-      });
+        const orders = results.map((row) => {
+          let orderAddress = "Address not specified";
+          if (row.buildingType === "House") {
+            orderAddress = formatHouseAddress(row);
+          } else if (row.buildingType === "Apartment") {
+            orderAddress = formatApartmentAddress(row);
+          }
 
-      resolve({ user, orders });
+          const paymentMethod = (row.paymentMethod || "").toLowerCase();
+          let cashAmountDue = null;
+
+          if (paymentMethod === "cash") {
+            const oldDeliveryCharge = Number(row.deliveryCharge) || 0;
+            const orderValue = (Number(row.fullTotal) || 0) - oldDeliveryCharge;
+
+            const city = rowCity(row);
+            const todaysDeliveryCharge =
+              city && cityToCharge[city] !== undefined
+                ? Number(cityToCharge[city])
+                : oldDeliveryCharge;
+
+            const creditPaid = Number(row.creditPaid) || 0;
+
+            cashAmountDue = orderValue + todaysDeliveryCharge - creditPaid;
+          }
+
+          return {
+            orderId: row.orderId,
+            sheduleTime: row.sheduleTime,
+            fullName: row.billingName,
+            title: row.billingTitle,
+            phonecode1: row.billingPhoneCode,
+            phone1: row.billingPhone,
+            phonecode2: row.billingPhoneCode2,
+            phone2: row.billingPhone2,
+            longitude: row.longitude,
+            latitude: row.latitude,
+            address: orderAddress,
+            processOrder: {
+              id: row.processOrderId,
+              invNo: row.invNo,
+              paymentMethod: row.paymentMethod,
+              isPaid: row.isPaid === 1,
+              status: row.status,
+              cashAmountDue,
+            },
+            pricing: row.fullTotal,
+          };
+        });
+
+        resolve({ user, orders });
+      } catch (chargeErr) {
+        console.error(
+          "Error resolving today's delivery charge:",
+          chargeErr.message,
+        );
+        return reject(new Error("Failed to resolve delivery charges"));
+      }
     });
   });
 };
