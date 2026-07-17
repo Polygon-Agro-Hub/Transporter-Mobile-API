@@ -24,10 +24,10 @@ exports.getReason = async () => {
 // Submit Return Order
 function getHandlingFee(fullTotal) {
   const total = Number(fullTotal) || 0;
-  if (total < HANDLING_FEE_CONSTANTS.LOW_TOTAL_LIMIT) {
+  if (total <= HANDLING_FEE_CONSTANTS.LOW_TOTAL_LIMIT) {
     return HANDLING_FEE_CONSTANTS.LOW_FEE;
   }
-  if (total < HANDLING_FEE_CONSTANTS.MID_TOTAL_LIMIT) {
+  if (total <= HANDLING_FEE_CONSTANTS.MID_TOTAL_LIMIT) {
     return HANDLING_FEE_CONSTANTS.MID_FEE;
   }
   return HANDLING_FEE_CONSTANTS.HIGH_FEE;
@@ -50,23 +50,6 @@ function normalizeBuildingType(buildingType) {
   if (HOUSE_VALUES.includes(val)) return "house";
   if (APARTMENT_VALUES.includes(val)) return "apartment";
   return null;
-}
-
-function queryAsync(connection, sql, params) {
-  return new Promise((resolve, reject) => {
-    connection.query(sql, params, (err, results) => {
-      if (err) reject(err);
-      else resolve(results);
-    });
-  });
-}
-
-
-function getHandlingFee(orderAmountWithDeliveryFee) {
-  const x = Number(orderAmountWithDeliveryFee) || 0;
-  if (x <= 2000) return 150;
-  if (x <= 4000) return 250;
-  return 350;
 }
 
 
@@ -399,8 +382,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                             FROM collection_officer.driverorders do
                             INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
                             INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
-                            INNER JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
-                            INNER JOIN collection_officer.drivercategory dc ON dcs.catId = dc.id
+                            LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
+                            LEFT JOIN collection_officer.drivercategory dc ON dcs.catId = dc.id
                             WHERE do.id IN (?)
                           `;
 
