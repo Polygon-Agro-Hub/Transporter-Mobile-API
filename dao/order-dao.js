@@ -1219,8 +1219,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 FROM collection_officer.driverorders do
                 INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
                 INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
-                INNER JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
-                INNER JOIN collection_officer.drivercategory dc ON dcs.catId = dc.id
+                LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
+                LEFT JOIN collection_officer.drivercategory dc ON dcs.catId = dc.id
                 WHERE do.orderId IN (?)
               `;
 
@@ -1250,7 +1250,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               for (const row of earnPriceRows) {
                 earnPriceByDriverOrderId[row.driverOrderId] = Number(
                   row.payout,
-                );
+                ) || 0;
               }
 
               const driverOrderIds = Object.keys(earnPriceByDriverOrderId);
