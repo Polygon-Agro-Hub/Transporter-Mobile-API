@@ -190,3 +190,111 @@ exports.updateProfileImage = async (empId, imageUrl) => {
     throw new Error("Failed to update profile image: " + err.message);
   }
 };
+
+// Get Driver's Earnings
+exports.getEarnings = async (driverId, date) => {
+  try {
+    const targetDate = date ? date : new Date().toISOString().split("T")[0];
+    const sql = `
+      SELECT 
+        do.earnPrice,
+        po.paymentMethod
+      FROM collection_officer.driverorders do
+      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      WHERE dom.driverId = ?
+        AND DATE(do.createdAt) = ?
+    `;
+    const [rows] = await db.collectionofficer.promise().query(sql, [driverId, targetDate]);
+
+    let totalEarnings = 0;
+    let cashEarnings = 0;
+    let cashOrders = 0;
+    let cardEarnings = 0;
+    let cardOrders = 0;
+
+    rows.forEach((row) => {
+      const earnPrice = Number(row.earnPrice) || 0;
+      totalEarnings += earnPrice;
+      if (row.paymentMethod === "Cash") {
+        cashEarnings += earnPrice;
+        cashOrders++;
+      } else if (row.paymentMethod === "Card") {
+        cardEarnings += earnPrice;
+        cardOrders++;
+      }
+    });
+
+    return {
+      todayDate: new Date(targetDate).toISOString(),
+      totalEarnings,
+      cashEarnings,
+      cashOrders,
+      cardEarnings,
+      cardOrders,
+    };
+  } catch (err) {
+    console.error("Database error in getEarnings:", err.message);
+    throw new Error("Failed to fetch earnings: " + err.message);
+  }
+};
+
+// Get Driver's Earnings History
+exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
+  try {
+    const sql = `
+      SELECT 
+        do.earnPrice,
+        po.invNo,
+        po.paymentMethod,
+        do.createdAt
+      FROM collection_officer.driverorders do
+      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      WHERE dom.driverId = ?
+        AND DATE(do.createdAt) BETWEEN ? AND ?
+      ORDER BY do.createdAt DESC
+    `;
+    const [rows] = await db.collectionofficer.promise().query(sql, [driverId, fromDate, toDate]);
+
+    let cashEarnings = 0;
+    let cashOrders = 0;
+    let cardEarnings = 0;
+    let cardOrders = 0;
+
+    const orders = rows.map((row) => {
+      const earnPrice = Number(row.earnPrice) || 0;
+      const method = row.paymentMethod ? String(row.paymentMethod).toLowerCase() : "";
+      
+      if (method === "cash") {
+        cashEarnings += earnPrice;
+        cashOrders++;
+      } else if (method === "card") {
+        cardEarnings += earnPrice;
+        cardOrders++;
+      }
+
+      return {
+        orderId: row.invNo,
+        dateTime: row.createdAt,
+        method: method === "cash" || method === "card" ? method : "cash",
+        earnings: earnPrice,
+      };
+    });
+
+    return {
+      summary: {
+        fromDate,
+        toDate,
+        cashEarnings,
+        cashOrders,
+        cardEarnings,
+        cardOrders,
+      },
+      orders,
+    };
+  } catch (err) {
+    console.error("Database error in getEarningsHistory:", err.message);
+    throw new Error("Failed to fetch earnings history: " + err.message);
+  }
+};

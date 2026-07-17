@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middlewares/auth.middleware');
 const homeEp = require('../endpoint/home-ep');
+const { upload } = require('../middlewares/multer.middleware');
 
 /**
  * @openapi
@@ -315,5 +316,151 @@ router.post('/hand-over-cash', auth, homeEp.handOverCash);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get('/get-officer-details/:empId', auth, homeEp.getOfficerDetails);
+
+/**
+ * @openapi
+ * /api/home/upload-transfer-slip:
+ *   post:
+ *     tags:
+ *       - Home
+ *     summary: Upload Bank Transfer Slip
+ *     description: Upload a bank transfer slip image or PDF and create a transaction for cash handover review.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - slip
+ *               - amount
+ *             properties:
+ *               slip:
+ *                 type: string
+ *                 format: binary
+ *                 description: Bank transfer slip document (JPEG, JPG, PNG, PDF).
+ *               amount:
+ *                 type: number
+ *                 description: Transfer amount.
+ *                 example: 9000.00
+ *     responses:
+ *       200:
+ *         description: Transfer slip uploaded successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 message:
+ *                   type: string
+ *                   example: "Slip uploaded successfully. Transaction is pending review."
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     transactionId:
+ *                       type: integer
+ *                       example: 12
+ *                     transCode:
+ *                       type: string
+ *                       example: "TXN-1718290310239"
+ *                     amount:
+ *                       type: number
+ *                       example: 9000.00
+ *                     paySlip:
+ *                       type: string
+ *                       example: "https://r2.example.com/rider/transfer-slips/file.pdf"
+ *       400:
+ *         description: Bad Request (missing file, invalid amount, or no active shift).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/upload-transfer-slip', auth, upload.single('slip'), homeEp.uploadTransferSlip);
+
+/**
+ * @openapi
+ * /api/home/get-latest-transaction-status:
+ *   get:
+ *     tags:
+ *       - Home
+ *     summary: Get Latest Transaction Status
+ *     description: Retrieve status metadata of the latest bank transfer slip upload associated with the active shift.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Transaction status fetched successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 message:
+ *                   type: string
+ *                   example: "Transaction status fetched successfully"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                       example: 12
+ *                     transCode:
+ *                       type: string
+ *                       example: "TXN-1718290310239"
+ *                     transAmount:
+ *                       type: number
+ *                       example: 9000.00
+ *                     paySlip:
+ *                       type: string
+ *                       example: "https://r2.example.com/rider/transfer-slips/file.pdf"
+ *                     transStatus:
+ *                       type: string
+ *                       enum: ["To Review", "Approved", "Rejected"]
+ *                       example: "To Review"
+ *                     createdAt:
+ *                       type: string
+ *                       format: date-time
+ *                       example: "2026-06-25T12:00:00.000Z"
+ *       401:
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: No transactions found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.get('/get-latest-transaction-status', auth, homeEp.getLatestTransactionStatus);
 
 module.exports = router;

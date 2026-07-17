@@ -12,6 +12,8 @@ jest.mock('../../dao/userAuth-dao', () => ({
   changePassword: jest.fn(),
   getUserProfile: jest.fn(),
   updateProfileImage: jest.fn(),
+  getEarnings: jest.fn(),
+  getEarningsHistory: jest.fn(),
 }));
 
 // Mock express response
@@ -313,6 +315,125 @@ describe('User Authentication Endpoints', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         message: 'Failed to update profile image: Unexpected DAO Error',
+      });
+    });
+  });
+
+  describe('getEarnings', () => {
+    it('should successfully return earnings', async () => {
+      req = {
+        user: { id: 1 },
+        query: { date: '2026-07-15' }
+      };
+
+      const mockEarnings = {
+        todayDate: '2026-07-15T00:00:00.000Z',
+        totalEarnings: 1000,
+        cashEarnings: 600,
+        cashOrders: 2,
+        cardEarnings: 400,
+        cardOrders: 1
+      };
+
+      userDao.getEarnings.mockResolvedValue(mockEarnings);
+
+      await userAuthEp.getEarnings(req, res);
+
+      expect(userDao.getEarnings).toHaveBeenCalledWith(1, '2026-07-15');
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        status: 'success',
+        message: 'Earnings fetched successfully',
+        data: mockEarnings
+      });
+    });
+
+    it('should return 500 on DAO error', async () => {
+      req = {
+        user: { id: 1 },
+        query: { date: '2026-07-15' }
+      };
+
+      userDao.getEarnings.mockRejectedValue(new Error('DAO Error'));
+
+      await userAuthEp.getEarnings(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        status: 'error',
+        message: 'Failed to fetch earnings: DAO Error'
+      });
+    });
+  });
+
+  describe('getEarningsHistory', () => {
+    it('should return 400 if from or to date is missing', async () => {
+      req = {
+        user: { id: 1 },
+        query: { from: '2026-07-15' } // missing 'to'
+      };
+
+      await userAuthEp.getEarningsHistory(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        status: 'error',
+        message: 'From date and to date are required'
+      });
+    });
+
+    it('should successfully return earnings history', async () => {
+      req = {
+        user: { id: 1 },
+        query: { from: '2026-07-10', to: '2026-07-15' }
+      };
+
+      const mockHistory = {
+        summary: {
+          fromDate: '2026-07-10',
+          toDate: '2026-07-15',
+          cashEarnings: 600,
+          cashOrders: 2,
+          cardEarnings: 400,
+          cardOrders: 1
+        },
+        orders: [
+          { orderId: 'INV1', dateTime: '2026-07-15T12:00:00Z', method: 'cash', earnings: 300 }
+        ]
+      };
+
+      userDao.getEarningsHistory.mockResolvedValue(mockHistory);
+
+      await userAuthEp.getEarningsHistory(req, res);
+
+      expect(userDao.getEarningsHistory).toHaveBeenCalledWith(1, '2026-07-10', '2026-07-15');
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        status: 'success',
+        message: 'Earnings history fetched successfully',
+        data: mockHistory
+      });
+    });
+
+    it('should return 500 on DAO error', async () => {
+      req = {
+        user: { id: 1 },
+        query: { from: '2026-07-10', to: '2026-07-15' }
+      };
+
+      userDao.getEarningsHistory.mockRejectedValue(new Error('DAO Error'));
+
+      await userAuthEp.getEarningsHistory(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        status: 'error',
+        message: 'Failed to fetch earnings history: DAO Error'
       });
     });
   });

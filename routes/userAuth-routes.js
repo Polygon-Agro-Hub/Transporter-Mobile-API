@@ -299,4 +299,7 @@ router.post('/update-profile-image',
   userAuthEp.updateProfileImage
 );
 
+router.get('/get-earnings', auth, userAuthEp.getEarnings);
+router.get('/get-earnings-history', auth, userAuthEp.getEarningsHistory);
+
 module.exports = router;
