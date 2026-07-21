@@ -376,16 +376,15 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                           }
 
                           const getPayoutsQuery = `
-                            SELECT 
-                              do.id AS driverOrderId,
-                              dc.payout
-                            FROM collection_officer.driverorders do
-                            INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-                            INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
-                            LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
-                            LEFT JOIN collection_officer.drivercategory dc ON dcs.catId = dc.id
-                            WHERE do.id IN (?)
-                          `;
+  SELECT 
+    do.id AS driverOrderId,
+    dcs.slvPayout
+  FROM collection_officer.driverorders do
+  INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+  INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
+  LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
+  WHERE do.id IN (?)
+`;
 
                           connection.query(
                             getPayoutsQuery,
@@ -416,7 +415,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
 
                               const earnPriceByDriverOrderId = {};
                               payoutResults.forEach((row) => {
-                                const payout = Number(row.payout) || 0;
+                                const payout = Number(row.slvPayout) || 0;
                                 earnPriceByDriverOrderId[row.driverOrderId] =
                                   payout * 0.95;
                               });
@@ -659,6 +658,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         po.isPaid,
         po.status as processStatus,
         po.paymentMethod,
+        po.creditPaid,
         
         -- Order Details
         o.id as orderId,
@@ -672,6 +672,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         o.buildingType,
         o.total,
         o.fullTotal,
+        o.deliveryCharge,
         
         -- User Details
         u.id as userId,
@@ -744,7 +745,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
     const params = [driverId];
 
-    db.collectionofficer.query(sql, params, (err, results) => {
+    db.collectionofficer.query(sql, params, async (err, results) => {
       if (err) {
         console.error(
           "Database error fetching driver return orders:",
@@ -764,6 +765,40 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
       });
 
       const uniqueResults = Array.from(uniqueOrdersMap.values());
+
+      // ---- Resolve today's delivery charge per city ----
+      const rowCity = (row) => {
+        if (row.buildingType === "House") return row.house_city;
+        if (row.buildingType === "Apartment") return row.apartment_city;
+        return null;
+      };
+
+      const cities = [...new Set(uniqueResults.map(rowCity).filter(Boolean))];
+      const cityToCharge = {};
+
+      try {
+        if (cities.length > 0) {
+          const chargeRows = await new Promise((res, rej) => {
+            db.collectionofficer.query(
+              `SELECT city, charge FROM collection_officer.deliverycharge WHERE city IN (?)`,
+              [cities],
+              (err, rows) => (err ? rej(err) : res(rows)),
+            );
+          });
+
+          chargeRows.forEach((r) => {
+            if (cityToCharge[r.city] === undefined) {
+              cityToCharge[r.city] = r.charge;
+            }
+          });
+        }
+      } catch (chargeErr) {
+        console.error(
+          "Error resolving today's delivery charge:",
+          chargeErr.message,
+        );
+        return reject(new Error("Failed to resolve delivery charges"));
+      }
 
       const formattedResults = uniqueResults.map((row) => {
         let formattedAddress = "No Address";
@@ -806,6 +841,25 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
         const customerTitle = row.orderTitle || row.userTitle || "";
 
+        // ---- Cash amount due: (fullTotal - oldDeliveryCharge) + todaysDeliveryCharge - creditPaid ----
+        let cashAmountDue = null;
+        const paymentMethod = (row.paymentMethod || "").toLowerCase();
+
+        if (paymentMethod === "cash") {
+          const oldDeliveryCharge = Number(row.deliveryCharge) || 0;
+          const orderValue = (Number(row.fullTotal) || 0) - oldDeliveryCharge;
+
+          const city = rowCity(row);
+          const todaysDeliveryCharge =
+            city && cityToCharge[city] !== undefined
+              ? Number(cityToCharge[city])
+              : oldDeliveryCharge;
+
+          const creditPaid = Number(row.creditPaid) || 0;
+
+          cashAmountDue = orderValue + todaysDeliveryCharge - creditPaid;
+        }
+
         // Format the return order
         const formattedOrder = {
           driverOrderId: row.driverOrderId,
@@ -817,6 +871,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
           invoiceNumber: row.invNo,
           amount: row.amount,
           totalAmount: row.fullTotal || row.total,
+          cashAmountDue,
           isPaid: row.isPaid === 1,
           paymentMethod: row.paymentMethod,
           processStatus: row.processStatus,

@@ -1211,18 +1211,17 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               }
 
               const earnPriceInfoQuery = `
-                SELECT
-                  do.id AS driverOrderId,
-                  do.orderId,
-                  do.drvOrderMainId,
-                  dc.payout
-                FROM collection_officer.driverorders do
-                INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-                INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
-                LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
-                LEFT JOIN collection_officer.drivercategory dc ON dcs.catId = dc.id
-                WHERE do.orderId IN (?)
-              `;
+  SELECT
+    do.id AS driverOrderId,
+    do.orderId,
+    do.drvOrderMainId,
+    dcs.slvPayout
+  FROM collection_officer.driverorders do
+  INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+  INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
+  LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
+  WHERE do.orderId IN (?)
+`;
 
               const earnPriceRows = await queryAsync(
                 connection,
@@ -1249,7 +1248,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               const earnPriceByDriverOrderId = {};
               for (const row of earnPriceRows) {
                 earnPriceByDriverOrderId[row.driverOrderId] = Number(
-                  row.payout,
+                  row.slvPayout,
                 ) || 0;
               }
 
