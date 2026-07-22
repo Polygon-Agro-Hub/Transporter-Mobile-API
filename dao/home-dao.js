@@ -286,6 +286,8 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
                 COALESCE(o.fullTotal, 0) as fullTotal,
                 COALESCE(o.deliveryCharge, 0) as deliveryCharge,
                 o.buildingType,
+                o.isCoupon,
+                o.couponType,
                 COALESCE(do.earnPrice, 0) as earned,
                 do.createdAt,
                 dom.driverId,
@@ -324,12 +326,16 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
           return reject(new Error("Failed to fetch amount"));
         }
 
-        // ---- Resolve today's delivery charge per city ----
         const rowCity = (row) => {
           if (row.buildingType === "House") return row.house_city;
           if (row.buildingType === "Apartment") return row.apartment_city;
           return null;
         };
+
+        const isFreeDeliveryCoupon = (row) =>
+          !!row.isCoupon &&
+          (row.couponType || "").toString().trim().toLowerCase() ===
+          "free delivery";
 
         const cities = [...new Set(results.map(rowCity).filter(Boolean))];
         const cityToCharge = {};
@@ -358,20 +364,24 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
           return reject(new Error("Failed to resolve delivery charges"));
         }
 
-        // ---- amount = (fullTotal - oldDeliveryCharge) + todaysDeliveryCharge - creditPaid ----
         const formattedResults = results.map((item) => {
           const oldDeliveryCharge = Number(item.deliveryCharge) || 0;
           const orderValue = (Number(item.fullTotal) || 0) - oldDeliveryCharge;
-
-          const city = rowCity(item);
-          const todaysDeliveryCharge =
-            city && cityToCharge[city] !== undefined
-              ? Number(cityToCharge[city])
-              : oldDeliveryCharge;
-
           const creditPaid = Number(item.creditPaid) || 0;
 
-          const computedAmount = orderValue + todaysDeliveryCharge - creditPaid;
+          let computedAmount;
+
+          if (isFreeDeliveryCoupon(item)) {
+            computedAmount = orderValue - creditPaid;
+          } else {
+            const city = rowCity(item);
+            const todaysDeliveryCharge =
+              city && cityToCharge[city] !== undefined
+                ? Number(cityToCharge[city])
+                : oldDeliveryCharge;
+
+            computedAmount = orderValue + todaysDeliveryCharge - creditPaid;
+          }
 
           return {
             id: String(item.driverOrderId),
@@ -551,7 +561,7 @@ exports.createTransaction = async (
 exports.getLatestTransactionStatus = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
-      SELECT tx.id, tx.transCode, tx.transAmount, tx.paySlip, tx.transStatus, tx.createdAt 
+      SELECT tx.id, tx.transCode, tx.transAmount, tx.paySlip, tx.transStatus,tx.updatedAt,tx.rejectReason, tx.createdAt 
       FROM collection_officer.driverordertransaction tx
       INNER JOIN collection_officer.driverordermain dom ON tx.drvOrderMainId = dom.id
       WHERE dom.driverId = ? AND dom.isHandOver = 0
@@ -652,6 +662,97 @@ exports.updateTransactionStatus = async (transactionId, status) => {
           }
         },
       );
+    });
+  });
+};
+
+exports.createTransactionWithSeq = async (
+  driverId,
+  drvOrderMainId,
+  empIdDigits,
+  dateStr,
+  transAmount,
+  paySlip,
+) => {
+  return new Promise((resolve, reject) => {
+    db.collectionofficer.getConnection((err, connection) => {
+      if (err) return reject(err);
+
+      connection.beginTransaction((err) => {
+        if (err) {
+          connection.release();
+          return reject(err);
+        }
+
+        const pattern = `D${empIdDigits}${dateStr}%`;
+
+        const findLastSql = `
+          SELECT tx.transCode
+          FROM collection_officer.driverordertransaction tx
+          INNER JOIN collection_officer.driverordermain dom
+            ON tx.drvOrderMainId = dom.id
+          WHERE dom.driverId = ?
+            AND tx.transCode LIKE ?
+          ORDER BY tx.transCode DESC
+          LIMIT 1
+          FOR UPDATE
+        `;
+
+        connection.query(findLastSql, [driverId, pattern], (err, results) => {
+          if (err) {
+            return connection.rollback(() => {
+              connection.release();
+              reject(err);
+            });
+          }
+
+          let nextSeq = 1;
+          if (results.length > 0) {
+            const lastCode = results[0].transCode;
+            const lastSeqStr = lastCode.slice(-2);
+            const lastSeq = parseInt(lastSeqStr, 10);
+            if (!isNaN(lastSeq)) {
+              nextSeq = lastSeq + 1;
+            }
+          }
+
+          const seqStr = String(nextSeq).padStart(2, "0");
+          const transCode = `D${empIdDigits}${dateStr}${seqStr}`;
+
+          const insertSql = `
+            INSERT INTO collection_officer.driverordertransaction
+            (drvOrderMainId, transCode, transAmount, paySlip, transStatus)
+            VALUES (?, ?, ?, ?, 'To Review')
+          `;
+
+          connection.query(
+            insertSql,
+            [drvOrderMainId, transCode, transAmount, paySlip],
+            (err, insertResult) => {
+              if (err) {
+                return connection.rollback(() => {
+                  connection.release();
+                  reject(err);
+                });
+              }
+
+              connection.commit((err) => {
+                if (err) {
+                  return connection.rollback(() => {
+                    connection.release();
+                    reject(err);
+                  });
+                }
+                connection.release();
+                resolve({
+                  transactionId: insertResult.insertId,
+                  transCode,
+                });
+              });
+            },
+          );
+        });
+      });
     });
   });
 };

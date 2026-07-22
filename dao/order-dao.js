@@ -569,6 +569,14 @@ exports.getDriverOrdersDAO = async (
 };
 
 // Get Order User Details DAO
+// Shared helper - keep in sync with other DAOs
+function isFreeDeliveryCoupon(row) {
+  return (
+    !!row.isCoupon &&
+    (row.couponType || "").toString().trim().toLowerCase() === "free delivery"
+  );
+}
+
 exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -594,6 +602,8 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         o.delivaryMethod,
         o.fullTotal,
         o.deliveryCharge,
+        o.isCoupon,
+        o.couponType,
         po.id as processOrderId,
         po.invNo,
         po.paymentMethod,
@@ -732,16 +742,20 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
           if (paymentMethod === "cash") {
             const oldDeliveryCharge = Number(row.deliveryCharge) || 0;
             const orderValue = (Number(row.fullTotal) || 0) - oldDeliveryCharge;
-
-            const city = rowCity(row);
-            const todaysDeliveryCharge =
-              city && cityToCharge[city] !== undefined
-                ? Number(cityToCharge[city])
-                : oldDeliveryCharge;
-
             const creditPaid = Number(row.creditPaid) || 0;
 
-            cashAmountDue = orderValue + todaysDeliveryCharge - creditPaid;
+            if (isFreeDeliveryCoupon(row)) {
+              // Free-delivery coupon: skip delivery-charge component entirely
+              cashAmountDue = orderValue - creditPaid;
+            } else {
+              const city = rowCity(row);
+              const todaysDeliveryCharge =
+                city && cityToCharge[city] !== undefined
+                  ? Number(cityToCharge[city])
+                  : oldDeliveryCharge;
+
+              cashAmountDue = orderValue + todaysDeliveryCharge - creditPaid;
+            }
           }
 
           return {
@@ -779,7 +793,6 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
     });
   });
 };
-
 // Start Journey DAO
 exports.startJourneyDAO = async (driverId, orderIds) => {
   return new Promise((resolve, reject) => {
@@ -963,6 +976,14 @@ function normalizeBuildingType(buildingType) {
   return null;
 }
 
+// NEW: coupon helper
+function isFreeDeliveryCoupon(order) {
+  return (
+    !!order.isCoupon &&
+    (order.couponType || "").toString().trim().toLowerCase() === "free delivery"
+  );
+}
+
 function queryAsync(connection, sql, params) {
   return new Promise((resolve, reject) => {
     connection.query(sql, params, (err, results) => {
@@ -1041,6 +1062,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             o.deliveryCharge AS currentDeliveryCharge,
             o.buildingType,
             o.isCoupon,
+            o.couponType,
             o.couponValue,
             mu.creditBalance
           FROM market_place.processorders po
@@ -1146,21 +1168,39 @@ exports.saveSignatureAndUpdateStatusDAO = async (
 
               const cashOrderUpdates = [];
 
+              const cashDeliveryChargeUpdates = [];
+
               for (const order of cashOrders) {
                 const orderValue =
                   (Number(order.fullTotal) || 0) -
                   (Number(order.currentDeliveryCharge) || 0);
 
-                const city = orderIdToCity[order.orderId];
-                const cityCharge = city ? cityToCharge[city] : undefined;
-
-                const newDeliveryCharge =
-                  cityCharge !== undefined
-                    ? Number(cityCharge)
-                    : Number(order.currentDeliveryCharge) || 0;
-
                 const creditPaid = Number(order.creditPaid) || 0;
-                const totalDue = orderValue + newDeliveryCharge;
+                const freeDelivery = isFreeDeliveryCoupon(order);
+
+                let newDeliveryCharge;
+                let totalDue;
+
+                if (freeDelivery) {
+                  newDeliveryCharge = Number(order.currentDeliveryCharge) || 0;
+                  totalDue = orderValue;
+                } else {
+                  const city = orderIdToCity[order.orderId];
+                  const cityCharge = city ? cityToCharge[city] : undefined;
+
+                  newDeliveryCharge =
+                    cityCharge !== undefined
+                      ? Number(cityCharge)
+                      : Number(order.currentDeliveryCharge) || 0;
+
+                  totalDue = orderValue + newDeliveryCharge;
+
+                  // Only correct the deliveryCharge column when no coupon applies
+                  cashDeliveryChargeUpdates.push({
+                    orderId: order.orderId,
+                    newDeliveryCharge,
+                  });
+                }
 
                 const amount = totalDue;
                 const moneyPaid =
@@ -1179,6 +1219,10 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               const cardDeliveryChargeCorrections = [];
 
               for (const order of cardOrders) {
+                if (isFreeDeliveryCoupon(order)) {
+                  continue;
+                }
+
                 const city = orderIdToCity[order.orderId];
                 if (!city) continue;
 
@@ -1247,9 +1291,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
 
               const earnPriceByDriverOrderId = {};
               for (const row of earnPriceRows) {
-                earnPriceByDriverOrderId[row.driverOrderId] = Number(
-                  row.slvPayout,
-                ) || 0;
+                earnPriceByDriverOrderId[row.driverOrderId] =
+                  Number(row.slvPayout) || 0;
               }
 
               const driverOrderIds = Object.keys(earnPriceByDriverOrderId);
@@ -1290,7 +1333,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
 
                   const updatePromises = [];
 
-                  // Mark all process orders delivered
                   const updateAllOrdersStatusQuery = `
                     UPDATE market_place.processorders
                     SET
@@ -1314,7 +1356,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     }),
                   );
 
-                  // CASH: isPaid / amount / moneyPaid via CASE
                   if (cashOrderUpdates.length > 0) {
                     const cashProcessOrderIds = cashOrderUpdates.map(
                       (u) => u.processOrderId,
@@ -1366,8 +1407,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       }),
                     );
 
-                    // Cash: orders.deliveryCharge -> today's rate
-                    cashOrderUpdates.forEach(
+                    cashDeliveryChargeUpdates.forEach(
                       ({ orderId, newDeliveryCharge }) => {
                         updatePromises.push(
                           new Promise((resolve, reject) => {
@@ -1403,7 +1443,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     );
                   }
 
-                  // CARD: mark paid using original fullTotal (unchanged)
                   if (cardOrders.length > 0) {
                     const cardOrderIds = cardOrders.map(
                       (o) => o.processOrderId,
@@ -1429,7 +1468,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     );
                   }
 
-                  // CARD: orders.deliveryCharge -> today's rate
                   cardDeliveryChargeCorrections.forEach(
                     ({ orderId, correctDeliveryCharge }) => {
                       updatePromises.push(
@@ -1465,7 +1503,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     },
                   );
 
-                  // CARD: creditBalance += (oldCharge - newCharge) per user
                   Object.entries(creditBalanceDeltaByUser).forEach(
                     ([userId, delta]) => {
                       if (delta === 0) return;
@@ -1642,7 +1679,6 @@ exports.saveSignatureAndUpdateStatusDAO = async (
     });
   });
 };
-
 // Restart Journey DAO
 exports.reStartJourneyDAO = async (driverId, orderIds) => {
   try {
