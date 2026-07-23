@@ -52,6 +52,13 @@ function normalizeBuildingType(buildingType) {
   return null;
 }
 
+// Shared helper - keep in sync with other DAOs (saveSignatureAndUpdateStatusDAO, getReceivedCash)
+function isFreeDeliveryCoupon(row) {
+  return (
+    !!row.isCoupon &&
+    (row.couponType || "").toString().trim().toLowerCase() === "free delivery"
+  );
+}
 
 exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
   return new Promise((resolve, reject) => {
@@ -78,6 +85,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
             o.fullTotal,
             o.deliveryCharge AS currentDeliveryCharge,
             o.buildingType,
+            o.isCoupon,
+            o.couponType,
             o.userId
           FROM market_place.processorders po
           JOIN market_place.orders o ON po.orderId = o.id
@@ -109,7 +118,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
             }));
 
             try {
-
               const relevantRows = invoiceResult.filter((row) => {
                 const pm = (row.paymentMethod || "").toLowerCase();
                 return pm === "cash" || pm === "card";
@@ -122,7 +130,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               relevantRows.forEach((row) => {
                 const kind = normalizeBuildingType(row.buildingType);
                 if (kind === "house") houseOrderIds.push(row.orderId);
-                else if (kind === "apartment") apartmentOrderIds.push(row.orderId);
+                else if (kind === "apartment")
+                  apartmentOrderIds.push(row.orderId);
                 else unknownBuildingTypeOrders.push(row);
               });
 
@@ -183,28 +192,41 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                 });
               }
 
-
               const creditBalanceDeltaByUser = {};
               const creditBalanceBreakdown = [];
               const cashProcessOrderIds = [];
 
               invoiceResult.forEach((row) => {
                 const paymentMethod = (row.paymentMethod || "").toLowerCase();
-                const oldDeliveryCharge = Number(row.currentDeliveryCharge) || 0;
+                const oldDeliveryCharge =
+                  Number(row.currentDeliveryCharge) || 0;
                 const city = orderIdToCity[row.orderId];
                 const cityCharge = city ? cityToCharge[city] : undefined;
+                const freeDelivery = isFreeDeliveryCoupon(row);
 
+                const resolvedTodaysDeliveryCharge =
+                  cityCharge !== undefined
+                    ? Number(cityCharge)
+                    : oldDeliveryCharge;
 
-                const todaysDeliveryCharge =
-                  cityCharge !== undefined ? Number(cityCharge) : oldDeliveryCharge;
+                // If a free-delivery coupon applies, the delivery-charge component
+                // is excluded entirely from the handling-fee base and from the
+                // creditBalance delta, and the orders.deliveryCharge column must
+                // NOT be corrected for this order.
+                const todaysDeliveryCharge = freeDelivery
+                  ? 0
+                  : resolvedTodaysDeliveryCharge;
 
                 if (paymentMethod === "cash") {
                   cashProcessOrderIds.push(row.id);
 
-                  const orderValue = (Number(row.fullTotal) || 0) - oldDeliveryCharge;
+                  const orderValue =
+                    (Number(row.fullTotal) || 0) - oldDeliveryCharge;
                   const orderAmountWithTodaysDelivery =
                     orderValue + todaysDeliveryCharge;
-                  const handlingFee = getHandlingFee(orderAmountWithTodaysDelivery);
+                  const handlingFee = getHandlingFee(
+                    orderAmountWithTodaysDelivery,
+                  );
                   const creditPaid = Number(row.creditPaid) || 0;
 
                   let delta = -(todaysDeliveryCharge + handlingFee);
@@ -221,6 +243,9 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                     fullTotal: row.fullTotal,
                     oldDeliveryCharge,
                     todaysDeliveryCharge,
+                    isFreeDeliveryCoupon: freeDelivery,
+                    // used to decide whether orders.deliveryCharge should be corrected
+                    resolvedTodaysDeliveryCharge,
                     handlingFee,
                     creditPaid,
                     creditBalanceDelta: delta,
@@ -229,13 +254,15 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                 }
 
                 if (paymentMethod === "card") {
-                  const orderValue = (Number(row.fullTotal) || 0) - oldDeliveryCharge;
+                  const orderValue =
+                    (Number(row.fullTotal) || 0) - oldDeliveryCharge;
                   const orderAmountWithTodaysDelivery =
                     orderValue + todaysDeliveryCharge;
-                  const handlingFee = getHandlingFee(orderAmountWithTodaysDelivery);
+                  const handlingFee = getHandlingFee(
+                    orderAmountWithTodaysDelivery,
+                  );
                   const moneyPaid = Number(row.moneyPaid) || 0;
                   const creditPaid = Number(row.creditPaid) || 0;
-
 
                   let delta = moneyPaid - todaysDeliveryCharge - handlingFee;
                   if (creditPaid > 0) delta += creditPaid;
@@ -252,13 +279,14 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                     moneyPaid,
                     oldDeliveryCharge,
                     todaysDeliveryCharge,
+                    isFreeDeliveryCoupon: freeDelivery,
+                    resolvedTodaysDeliveryCharge,
                     handlingFee,
                     creditPaid,
                     creditBalanceDelta: delta,
                   });
                   return;
                 }
-
 
                 creditBalanceBreakdown.push({
                   processOrderId: row.id,
@@ -269,7 +297,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                   note: `Skipped - unsupported payment method (${row.paymentMethod})`,
                 });
               });
-
 
               const updateProcessOrdersQuery =
                 cashProcessOrderIds.length > 0
@@ -376,16 +403,15 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                           }
 
                           const getPayoutsQuery = `
-                            SELECT 
-                              do.id AS driverOrderId,
-                              dc.payout
-                            FROM collection_officer.driverorders do
-                            INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-                            INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
-                            LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
-                            LEFT JOIN collection_officer.drivercategory dc ON dcs.catId = dc.id
-                            WHERE do.id IN (?)
-                          `;
+  SELECT 
+    do.id AS driverOrderId,
+    dcs.slvPayout
+  FROM collection_officer.driverorders do
+  INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+  INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
+  LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
+  WHERE do.id IN (?)
+`;
 
                           connection.query(
                             getPayoutsQuery,
@@ -416,7 +442,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
 
                               const earnPriceByDriverOrderId = {};
                               payoutResults.forEach((row) => {
-                                const payout = Number(row.payout) || 0;
+                                const payout = Number(row.slvPayout) || 0;
                                 earnPriceByDriverOrderId[row.driverOrderId] =
                                   payout * 0.95;
                               });
@@ -486,12 +512,13 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                         });
                                       }
 
-
                                       let creditBalanceUpdateResults = [];
                                       try {
-                                        creditBalanceUpdateResults = await Promise.all(
-                                          Object.entries(creditBalanceDeltaByUser).map(
-                                            async ([uid, delta]) => {
+                                        creditBalanceUpdateResults =
+                                          await Promise.all(
+                                            Object.entries(
+                                              creditBalanceDeltaByUser,
+                                            ).map(async ([uid, delta]) => {
                                               if (delta === 0) return null;
 
                                               const numericUserId = Number(uid);
@@ -510,14 +537,16 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                               return {
                                                 userId: numericUserId,
                                                 delta,
-                                                affectedRows: result.affectedRows,
+                                                affectedRows:
+                                                  result.affectedRows,
                                                 changedRows: result.changedRows,
                                               };
-                                            },
-                                          ),
-                                        );
+                                            }),
+                                          );
                                         creditBalanceUpdateResults =
-                                          creditBalanceUpdateResults.filter(Boolean);
+                                          creditBalanceUpdateResults.filter(
+                                            Boolean,
+                                          );
                                       } catch (creditErr) {
                                         return connection.rollback(() => {
                                           connection.release();
@@ -534,35 +563,49 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                         });
                                       }
 
-
                                       let deliveryChargeUpdateResults = [];
                                       try {
+                                        // Only correct orders.deliveryCharge for
+                                        // Cash/Card rows that are NOT free-delivery
+                                        // coupon orders.
                                         const cashOrCardBreakdownRows =
                                           creditBalanceBreakdown.filter((b) => {
                                             const pm = (
                                               b.paymentMethod || ""
                                             ).toLowerCase();
                                             return (
-                                              (pm === "cash" || pm === "card") &&
-                                              b.todaysDeliveryCharge !== undefined
+                                              (pm === "cash" ||
+                                                pm === "card") &&
+                                              b.resolvedTodaysDeliveryCharge !==
+                                              undefined &&
+                                              !b.isFreeDeliveryCoupon
                                             );
                                           });
 
-                                        deliveryChargeUpdateResults = await Promise.all(
-                                          cashOrCardBreakdownRows.map(async (b) => {
-                                            const result = await queryAsync(
-                                              connection,
-                                              `UPDATE market_place.orders SET deliveryCharge = ? WHERE id = ?`,
-                                              [b.todaysDeliveryCharge, b.orderId],
-                                            );
-                                            return {
-                                              orderId: b.orderId,
-                                              newCharge: b.todaysDeliveryCharge,
-                                              affectedRows: result.affectedRows,
-                                              changedRows: result.changedRows,
-                                            };
-                                          }),
-                                        );
+                                        deliveryChargeUpdateResults =
+                                          await Promise.all(
+                                            cashOrCardBreakdownRows.map(
+                                              async (b) => {
+                                                const result = await queryAsync(
+                                                  connection,
+                                                  `UPDATE market_place.orders SET deliveryCharge = ? WHERE id = ?`,
+                                                  [
+                                                    b.resolvedTodaysDeliveryCharge,
+                                                    b.orderId,
+                                                  ],
+                                                );
+                                                return {
+                                                  orderId: b.orderId,
+                                                  newCharge:
+                                                    b.resolvedTodaysDeliveryCharge,
+                                                  affectedRows:
+                                                    result.affectedRows,
+                                                  changedRows:
+                                                    result.changedRows,
+                                                };
+                                              },
+                                            ),
+                                          );
                                       } catch (dcErr) {
                                         return connection.rollback(() => {
                                           connection.release();
@@ -574,6 +617,66 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                             new Error(
                                               "Failed to update deliveryCharge: " +
                                               dcErr.message,
+                                            ),
+                                          );
+                                        });
+                                      }
+
+                                      // ── NEW: persist handling fee per returned processOrder ──
+                                      // orderhandlingfee.orderId references market_place.processorders.id
+                                      let handlingFeeInsertResults = [];
+                                      try {
+                                        const handlingFeeRows =
+                                          creditBalanceBreakdown.filter(
+                                            (b) => b.handlingFee !== undefined,
+                                          );
+
+                                        if (handlingFeeRows.length > 0) {
+                                          const insertHandlingFeeQuery = `
+                                            INSERT INTO collection_officer.orderhandlingfee
+                                            (orderId, fee, createdAt)
+                                            VALUES ?
+                                          `;
+
+                                          const handlingFeeData =
+                                            handlingFeeRows.map((b) => [
+                                              b.processOrderId,
+                                              b.handlingFee,
+                                              new Date(),
+                                            ]);
+
+                                          const hfResult = await queryAsync(
+                                            connection,
+                                            insertHandlingFeeQuery,
+                                            [handlingFeeData],
+                                          );
+
+                                          handlingFeeInsertResults =
+                                            handlingFeeRows.map((b) => ({
+                                              processOrderId: b.processOrderId,
+                                              fee: b.handlingFee,
+                                            }));
+
+                                          if (
+                                            hfResult.affectedRows !==
+                                            handlingFeeRows.length
+                                          ) {
+                                            console.warn(
+                                              `[submitReturn][orderhandlingfee insert] ⚠️ Expected ${handlingFeeRows.length} rows inserted, got ${hfResult.affectedRows}.`,
+                                            );
+                                          }
+                                        }
+                                      } catch (hfErr) {
+                                        return connection.rollback(() => {
+                                          connection.release();
+                                          console.error(
+                                            "[submitReturn] Failed to insert orderhandlingfee:",
+                                            hfErr,
+                                          );
+                                          reject(
+                                            new Error(
+                                              "Failed to save handling fee: " +
+                                              hfErr.message,
                                             ),
                                           );
                                         });
@@ -607,6 +710,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                           creditBalanceUpdateResults,
                                           creditBalanceBreakdown,
                                           deliveryChargeUpdateResults,
+                                          handlingFeeInsertResults,
                                         });
                                       });
                                     },
@@ -641,8 +745,15 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
     });
   });
 };
-
 // Get Driver's Return Orders
+
+function isFreeDeliveryCoupon(row) {
+  return (
+    !!row.isCoupon &&
+    (row.couponType || "").toString().trim().toLowerCase() === "free delivery"
+  );
+}
+
 exports.getDriverReturnOrdersDAO = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -659,6 +770,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         po.isPaid,
         po.status as processStatus,
         po.paymentMethod,
+        po.creditPaid,
         
         -- Order Details
         o.id as orderId,
@@ -672,6 +784,9 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         o.buildingType,
         o.total,
         o.fullTotal,
+        o.deliveryCharge,
+        o.isCoupon,
+        o.couponType,
         
         -- User Details
         u.id as userId,
@@ -744,7 +859,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
     const params = [driverId];
 
-    db.collectionofficer.query(sql, params, (err, results) => {
+    db.collectionofficer.query(sql, params, async (err, results) => {
       if (err) {
         console.error(
           "Database error fetching driver return orders:",
@@ -764,6 +879,39 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
       });
 
       const uniqueResults = Array.from(uniqueOrdersMap.values());
+
+      const rowCity = (row) => {
+        if (row.buildingType === "House") return row.house_city;
+        if (row.buildingType === "Apartment") return row.apartment_city;
+        return null;
+      };
+
+      const cities = [...new Set(uniqueResults.map(rowCity).filter(Boolean))];
+      const cityToCharge = {};
+
+      try {
+        if (cities.length > 0) {
+          const chargeRows = await new Promise((res, rej) => {
+            db.collectionofficer.query(
+              `SELECT city, charge FROM collection_officer.deliverycharge WHERE city IN (?)`,
+              [cities],
+              (err, rows) => (err ? rej(err) : res(rows)),
+            );
+          });
+
+          chargeRows.forEach((r) => {
+            if (cityToCharge[r.city] === undefined) {
+              cityToCharge[r.city] = r.charge;
+            }
+          });
+        }
+      } catch (chargeErr) {
+        console.error(
+          "Error resolving today's delivery charge:",
+          chargeErr.message,
+        );
+        return reject(new Error("Failed to resolve delivery charges"));
+      }
 
       const formattedResults = uniqueResults.map((row) => {
         let formattedAddress = "No Address";
@@ -806,6 +954,27 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
         const customerTitle = row.orderTitle || row.userTitle || "";
 
+        let cashAmountDue = null;
+        const paymentMethod = (row.paymentMethod || "").toLowerCase();
+
+        if (paymentMethod === "cash") {
+          const oldDeliveryCharge = Number(row.deliveryCharge) || 0;
+          const orderValue = (Number(row.fullTotal) || 0) - oldDeliveryCharge;
+          const creditPaid = Number(row.creditPaid) || 0;
+
+          if (isFreeDeliveryCoupon(row)) {
+            cashAmountDue = orderValue - creditPaid;
+          } else {
+            const city = rowCity(row);
+            const todaysDeliveryCharge =
+              city && cityToCharge[city] !== undefined
+                ? Number(cityToCharge[city])
+                : oldDeliveryCharge;
+
+            cashAmountDue = orderValue + todaysDeliveryCharge - creditPaid;
+          }
+        }
+
         // Format the return order
         const formattedOrder = {
           driverOrderId: row.driverOrderId,
@@ -817,6 +986,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
           invoiceNumber: row.invNo,
           amount: row.amount,
           totalAmount: row.fullTotal || row.total,
+          cashAmountDue,
           isPaid: row.isPaid === 1,
           paymentMethod: row.paymentMethod,
           processStatus: row.processStatus,

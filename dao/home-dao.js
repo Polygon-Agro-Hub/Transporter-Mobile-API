@@ -90,7 +90,7 @@ exports.getAmount = async (driverId) => {
           AND DATE(CONVERT_TZ(dro.createdAt, '+00:00', '+05:30')) = CURDATE()
           AND do.drvStatus IN ('Return', 'Return Received')
       `;
- 
+
       db.collectionofficer.query(
         returnSql,
         [driverId],
@@ -104,7 +104,7 @@ exports.getAmount = async (driverId) => {
           } else {
             result.todayReturnOrders = retResults[0]?.todayReturnOrders || 0;
           }
- 
+
           const allLocationsSql = `
           SELECT 
             locations.locationKey,
@@ -246,19 +246,27 @@ exports.getAmount = async (driverId) => {
                 LIMIT 1
               `;
 
-              db.collectionofficer.query(txSql, [driverId], (txErr, txResults) => {
-                if (txErr) {
-                  console.error("Database error fetching transaction status:", txErr.message);
-                  result.activeTransactionStatus = null;
-                } else {
-                  result.activeTransactionStatus = txResults.length > 0 ? txResults[0].transStatus : null;
-                }
+              db.collectionofficer.query(
+                txSql,
+                [driverId],
+                (txErr, txResults) => {
+                  if (txErr) {
+                    console.error(
+                      "Database error fetching transaction status:",
+                      txErr.message,
+                    );
+                    result.activeTransactionStatus = null;
+                  } else {
+                    result.activeTransactionStatus =
+                      txResults.length > 0 ? txResults[0].transStatus : null;
+                  }
 
-                resolve({
-                  ...result,
-                  ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
-                });
-              });
+                  resolve({
+                    ...result,
+                    ongoingProcessOrderIds: ongoingProcessOrderIdsArray,
+                  });
+                },
+              );
             },
           );
         },
@@ -274,11 +282,18 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
                 do.id as driverOrderId,
                 do.orderId as processOrderId,
                 po.invNo as invoNo,
-                COALESCE(o.fullTotal, 0) as amount,
+                po.creditPaid,
+                COALESCE(o.fullTotal, 0) as fullTotal,
+                COALESCE(o.deliveryCharge, 0) as deliveryCharge,
+                o.buildingType,
+                o.isCoupon,
+                o.couponType,
                 COALESCE(do.earnPrice, 0) as earned,
                 do.createdAt,
                 dom.driverId,
-                o.id as orderId
+                o.id as orderId,
+                oh.city as house_city,
+                oa.city as apartment_city
             FROM 
                 collection_officer.driverorders do
             INNER JOIN 
@@ -287,6 +302,10 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
                 market_place.processorders po ON do.orderId = po.id
             INNER JOIN 
                 market_place.orders o ON po.orderId = o.id
+            LEFT JOIN
+                market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
+            LEFT JOIN
+                market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
             WHERE 
                 dom.driverId = ?
                 AND dom.isHandOver = 0
@@ -301,21 +320,79 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
     db.collectionofficer.query(
       sql,
       [driverId, paymentMethod],
-      (err, results) => {
+      async (err, results) => {
         if (err) {
           console.error("Database error fetching amount:", err.message);
           return reject(new Error("Failed to fetch amount"));
         }
 
-        const formattedResults = results.map((item) => ({
-          id: String(item.driverOrderId),
-          orderId: item.processOrderId,
-          invoNo: item.invoNo,
-          amount: parseFloat(item.amount) || 0,
-          earned: parseFloat(item.earned) || 0,
-          selected: false,
-          createdAt: item.createdAt,
-        }));
+        const rowCity = (row) => {
+          if (row.buildingType === "House") return row.house_city;
+          if (row.buildingType === "Apartment") return row.apartment_city;
+          return null;
+        };
+
+        const isFreeDeliveryCoupon = (row) =>
+          !!row.isCoupon &&
+          (row.couponType || "").toString().trim().toLowerCase() ===
+          "free delivery";
+
+        const cities = [...new Set(results.map(rowCity).filter(Boolean))];
+        const cityToCharge = {};
+
+        try {
+          if (cities.length > 0) {
+            const chargeRows = await new Promise((res, rej) => {
+              db.collectionofficer.query(
+                `SELECT city, charge FROM collection_officer.deliverycharge WHERE city IN (?)`,
+                [cities],
+                (err, rows) => (err ? rej(err) : res(rows)),
+              );
+            });
+
+            chargeRows.forEach((r) => {
+              if (cityToCharge[r.city] === undefined) {
+                cityToCharge[r.city] = r.charge;
+              }
+            });
+          }
+        } catch (chargeErr) {
+          console.error(
+            "Error resolving today's delivery charge:",
+            chargeErr.message,
+          );
+          return reject(new Error("Failed to resolve delivery charges"));
+        }
+
+        const formattedResults = results.map((item) => {
+          const oldDeliveryCharge = Number(item.deliveryCharge) || 0;
+          const orderValue = (Number(item.fullTotal) || 0) - oldDeliveryCharge;
+          const creditPaid = Number(item.creditPaid) || 0;
+
+          let computedAmount;
+
+          if (isFreeDeliveryCoupon(item)) {
+            computedAmount = orderValue - creditPaid;
+          } else {
+            const city = rowCity(item);
+            const todaysDeliveryCharge =
+              city && cityToCharge[city] !== undefined
+                ? Number(cityToCharge[city])
+                : oldDeliveryCharge;
+
+            computedAmount = orderValue + todaysDeliveryCharge - creditPaid;
+          }
+
+          return {
+            id: String(item.driverOrderId),
+            orderId: item.processOrderId,
+            invoNo: item.invoNo,
+            amount: computedAmount,
+            earned: parseFloat(item.earned) || 0,
+            selected: false,
+            createdAt: item.createdAt,
+          };
+        });
 
         resolve(formattedResults);
       },
@@ -458,24 +535,33 @@ exports.getActiveOrderMainId = async (driverId) => {
   });
 };
 
-exports.createTransaction = async (drvOrderMainId, transCode, transAmount, paySlip) => {
+exports.createTransaction = async (
+  drvOrderMainId,
+  transCode,
+  transAmount,
+  paySlip,
+) => {
   return new Promise((resolve, reject) => {
     const sql = `
       INSERT INTO collection_officer.driverordertransaction 
       (drvOrderMainId, transCode, transAmount, paySlip, transStatus) 
       VALUES (?, ?, ?, ?, 'To Review')
     `;
-    db.collectionofficer.query(sql, [drvOrderMainId, transCode, transAmount, paySlip], (err, results) => {
-      if (err) return reject(err);
-      resolve(results.insertId);
-    });
+    db.collectionofficer.query(
+      sql,
+      [drvOrderMainId, transCode, transAmount, paySlip],
+      (err, results) => {
+        if (err) return reject(err);
+        resolve(results.insertId);
+      },
+    );
   });
 };
 
 exports.getLatestTransactionStatus = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
-      SELECT tx.id, tx.transCode, tx.transAmount, tx.paySlip, tx.transStatus, tx.createdAt 
+      SELECT tx.id, tx.transCode, tx.transAmount, tx.paySlip, tx.transStatus,tx.updatedAt,tx.rejectReason, tx.createdAt 
       FROM collection_officer.driverordertransaction tx
       INNER JOIN collection_officer.driverordermain dom ON tx.drvOrderMainId = dom.id
       WHERE dom.driverId = ? AND dom.isHandOver = 0
@@ -500,59 +586,172 @@ exports.updateTransactionStatus = async (transactionId, status) => {
         WHERE id = ?
       `;
 
-      db.collectionofficer.query(updateTxSql, [status, transactionId], (err, results) => {
-        if (err) {
-          return db.collectionofficer.rollback(() => reject(err));
-        }
+      db.collectionofficer.query(
+        updateTxSql,
+        [status, transactionId],
+        (err, results) => {
+          if (err) {
+            return db.collectionofficer.rollback(() => reject(err));
+          }
 
-        if (status === "Approved") {
-          const getTxSql = `
+          if (status === "Approved") {
+            const getTxSql = `
             SELECT drvOrderMainId FROM collection_officer.driverordertransaction WHERE id = ?
           `;
 
-          db.collectionofficer.query(getTxSql, [transactionId], (err, txResults) => {
-            if (err) {
-              return db.collectionofficer.rollback(() => reject(err));
-            }
+            db.collectionofficer.query(
+              getTxSql,
+              [transactionId],
+              (err, txResults) => {
+                if (err) {
+                  return db.collectionofficer.rollback(() => reject(err));
+                }
 
-            if (txResults.length > 0) {
-              const drvOrderMainId = txResults[0].drvOrderMainId;
+                if (txResults.length > 0) {
+                  const drvOrderMainId = txResults[0].drvOrderMainId;
 
-              const updateMainSql = `
+                  const updateMainSql = `
                 UPDATE collection_officer.driverordermain
                 SET isHandOver = 1
                 WHERE id = ?
               `;
 
-              db.collectionofficer.query(updateMainSql, [drvOrderMainId], (err, mainResults) => {
-                if (err) {
-                  return db.collectionofficer.rollback(() => reject(err));
-                }
+                  db.collectionofficer.query(
+                    updateMainSql,
+                    [drvOrderMainId],
+                    (err, mainResults) => {
+                      if (err) {
+                        return db.collectionofficer.rollback(() => reject(err));
+                      }
 
-                db.collectionofficer.commit((err) => {
-                  if (err) {
-                    return db.collectionofficer.rollback(() => reject(err));
-                  }
-                  resolve({ transactionId, status, isHandOverUpdated: true });
+                      db.collectionofficer.commit((err) => {
+                        if (err) {
+                          return db.collectionofficer.rollback(() =>
+                            reject(err),
+                          );
+                        }
+                        resolve({
+                          transactionId,
+                          status,
+                          isHandOverUpdated: true,
+                        });
+                      });
+                    },
+                  );
+                } else {
+                  db.collectionofficer.commit((err) => {
+                    if (err) {
+                      return db.collectionofficer.rollback(() => reject(err));
+                    }
+                    resolve({
+                      transactionId,
+                      status,
+                      isHandOverUpdated: false,
+                    });
+                  });
+                }
+              },
+            );
+          } else {
+            db.collectionofficer.commit((err) => {
+              if (err) {
+                return db.collectionofficer.rollback(() => reject(err));
+              }
+              resolve({ transactionId, status, isHandOverUpdated: false });
+            });
+          }
+        },
+      );
+    });
+  });
+};
+
+exports.createTransactionWithSeq = async (
+  driverId,
+  drvOrderMainId,
+  empIdDigits,
+  dateStr,
+  transAmount,
+  paySlip,
+) => {
+  return new Promise((resolve, reject) => {
+    db.collectionofficer.getConnection((err, connection) => {
+      if (err) return reject(err);
+
+      connection.beginTransaction((err) => {
+        if (err) {
+          connection.release();
+          return reject(err);
+        }
+
+        const pattern = `D${empIdDigits}${dateStr}%`;
+
+        const findLastSql = `
+          SELECT tx.transCode
+          FROM collection_officer.driverordertransaction tx
+          INNER JOIN collection_officer.driverordermain dom
+            ON tx.drvOrderMainId = dom.id
+          WHERE dom.driverId = ?
+            AND tx.transCode LIKE ?
+          ORDER BY tx.transCode DESC
+          LIMIT 1
+          FOR UPDATE
+        `;
+
+        connection.query(findLastSql, [driverId, pattern], (err, results) => {
+          if (err) {
+            return connection.rollback(() => {
+              connection.release();
+              reject(err);
+            });
+          }
+
+          let nextSeq = 1;
+          if (results.length > 0) {
+            const lastCode = results[0].transCode;
+            const lastSeqStr = lastCode.slice(-2);
+            const lastSeq = parseInt(lastSeqStr, 10);
+            if (!isNaN(lastSeq)) {
+              nextSeq = lastSeq + 1;
+            }
+          }
+
+          const seqStr = String(nextSeq).padStart(2, "0");
+          const transCode = `D${empIdDigits}${dateStr}${seqStr}`;
+
+          const insertSql = `
+            INSERT INTO collection_officer.driverordertransaction
+            (drvOrderMainId, transCode, transAmount, paySlip, transStatus)
+            VALUES (?, ?, ?, ?, 'To Review')
+          `;
+
+          connection.query(
+            insertSql,
+            [drvOrderMainId, transCode, transAmount, paySlip],
+            (err, insertResult) => {
+              if (err) {
+                return connection.rollback(() => {
+                  connection.release();
+                  reject(err);
+                });
+              }
+
+              connection.commit((err) => {
+                if (err) {
+                  return connection.rollback(() => {
+                    connection.release();
+                    reject(err);
+                  });
+                }
+                connection.release();
+                resolve({
+                  transactionId: insertResult.insertId,
+                  transCode,
                 });
               });
-            } else {
-              db.collectionofficer.commit((err) => {
-                if (err) {
-                  return db.collectionofficer.rollback(() => reject(err));
-                }
-                resolve({ transactionId, status, isHandOverUpdated: false });
-              });
-            }
-          });
-        } else {
-          db.collectionofficer.commit((err) => {
-            if (err) {
-              return db.collectionofficer.rollback(() => reject(err));
-            }
-            resolve({ transactionId, status, isHandOverUpdated: false });
-          });
-        }
+            },
+          );
+        });
       });
     });
   });

@@ -291,16 +291,17 @@ exports.uploadTransferSlip = asyncHandler(async (req, res) => {
     const empIdDigits = empId.replace(/\D/g, "") || String(driverId).padStart(5, "0");
     const now = new Date();
     const yy = String(now.getFullYear()).substring(2);
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
     const dateStr = `${yy}${mm}${dd}`;
-    const transCode = `D${empIdDigits}${dateStr}01`;
 
-    const transactionId = await homeDao.createTransaction(
+    const { transactionId, transCode } = await homeDao.createTransactionWithSeq(
+      driverId,
       drvOrderMainId,
-      transCode,
+      empIdDigits,
+      dateStr,
       parseFloat(amount),
-      imageUrl
+      imageUrl,
     );
 
     res.status(200).json({
