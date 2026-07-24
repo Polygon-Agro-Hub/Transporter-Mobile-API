@@ -11,6 +11,33 @@ router.use((req, res, next) => {
 
 /**
  * @openapi
+ * /test:
+ *   get:
+ *     tags:
+ *       - Health
+ *     summary: Simple test route
+ *     description: Returns a friendly welcome message Po
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Friendly message returned
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Hi Po 👋"
+ */
+router.get("/test", (req, res) => {
+  res.status(200).json({
+    message: "Hi Polygon 👋",
+  });
+});
+
+/**
+ * @openapi
  * /health:
  *   get:
  *     tags:
@@ -30,7 +57,7 @@ router.get("/health", (req, res) => {
     uptime: formatUptime(process.uptime()),
     environment: process.env.NODE_ENV || "development",
     version: process.env.npm_package_version || "1.0.0",
-    service: "Govi-Transport API",
+    service: "GoVi-Trans API",
   };
 
   res.status(200).json(healthData);
@@ -59,7 +86,7 @@ router.get("/health/detailed", (req, res) => {
 
     // Application information
     application: {
-      name: "Govi-Transport API",
+      name: "GoVi-Trans API",
       version: process.env.npm_package_version || "1.0.0",
       nodeVersion: process.version,
       memoryUsage: formatMemoryUsage(process.memoryUsage()),
@@ -158,7 +185,7 @@ router.get("/health/ready", (req, res) => {
  */
 router.get("/home", (req, res) => {
   const welcomeMessage = {
-    message: "Welcome to Govi-Transport API",
+    message: "Welcome to GoVi-Trans API",
     description: "Your comprehensive agricultural management system",
     version: process.env.npm_package_version || "1.0.0",
     documentation: "/api-docs",

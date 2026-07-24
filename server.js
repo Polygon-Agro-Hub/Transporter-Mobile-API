@@ -13,12 +13,14 @@ const app = express();
 
 const BASE_PATH = "/transporter";
 
+// CORS configuration
 const corsOptions = {
   origin: process.env.CLIENT_ORIGIN || "http://localhost:8081",
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true,
 };
 
+// Middleware
 app.use(cors(corsOptions));
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
@@ -33,7 +35,7 @@ const DatabaseConnection = (db, name) => {
         if (err) {
           console.error(`Error pinging ${name} database:`, err);
         } else {
-          console.log(`Ping to ${name} database successful.`);
+          console.log(`✅ Ping to ${name} database successful.`);
         }
         connection.release();
       });
@@ -47,6 +49,7 @@ DatabaseConnection(collectionofficer, "CollectionOfficer");
 DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
+// Setup routes
 const userroute = require("./routes/userAuth-routes");
 const complainroute = require("./routes/complain-routes");
 const orderroute = require("./routes/order-routes");
@@ -68,13 +71,7 @@ app.use(`${BASE_PATH}/api/hold`, holdroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
 app.use(`${BASE_PATH}`, healthroute);
 
-// Test Route - Simple
-app.get(`${BASE_PATH}/test`, (req, res) => {
-  res.status(200).json({
-    message: "Hi Avishka 👋",
-  });
-});
-
+// Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).send("Something broke!!");

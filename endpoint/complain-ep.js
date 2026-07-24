@@ -1,5 +1,6 @@
 const complainDao = require("../dao/complain-dao");
 const asyncHandler = require("express-async-handler");
+const { addComplainSchema } = require("../validations/complain-validation");
 
 // Add Complain
 exports.AddComplain = asyncHandler(async (req, res) => {
@@ -10,16 +11,16 @@ exports.AddComplain = asyncHandler(async (req, res) => {
     });
   }
 
-  const officerId = req.user.id;
-  const { complainCategory, complain } = req.body;
-
-  // Validate input
-  if (!complainCategory || !complain || complain.trim() === "") {
+  const { error } = addComplainSchema.validate(req.body, { abortEarly: false });
+  if (error) {
     return res.status(400).json({
       status: "error",
       message: "Category and description are required",
     });
   }
+
+  const officerId = req.user.id;
+  const { complainCategory, complain } = req.body;
 
   try {
     const result = await complainDao.AddComplain(

@@ -1,4 +1,5 @@
 const db = require("../startup/database");
+const { HANDLING_FEE_CONSTANTS } = require("../constants/handling-fee");
 
 // Get All Return Reasons
 exports.getReason = async () => {
@@ -21,9 +22,46 @@ exports.getReason = async () => {
 };
 
 // Submit Return Order
+function getHandlingFee(fullTotal) {
+  const total = Number(fullTotal) || 0;
+  if (total <= HANDLING_FEE_CONSTANTS.LOW_TOTAL_LIMIT) {
+    return HANDLING_FEE_CONSTANTS.LOW_FEE;
+  }
+  if (total <= HANDLING_FEE_CONSTANTS.MID_TOTAL_LIMIT) {
+    return HANDLING_FEE_CONSTANTS.MID_FEE;
+  }
+  return HANDLING_FEE_CONSTANTS.HIGH_FEE;
+}
+
+function queryAsync(connection, sql, params) {
+  return new Promise((resolve, reject) => {
+    connection.query(sql, params, (err, results) => {
+      if (err) reject(err);
+      else resolve(results);
+    });
+  });
+}
+
+const HOUSE_VALUES = ["house"];
+const APARTMENT_VALUES = ["apartment", "flat"];
+
+function normalizeBuildingType(buildingType) {
+  const val = (buildingType || "").toString().trim().toLowerCase();
+  if (HOUSE_VALUES.includes(val)) return "house";
+  if (APARTMENT_VALUES.includes(val)) return "apartment";
+  return null;
+}
+
+// Shared helper - keep in sync with other DAOs (saveSignatureAndUpdateStatusDAO, getReceivedCash)
+function isFreeDeliveryCoupon(row) {
+  return (
+    !!row.isCoupon &&
+    (row.couponType || "").toString().trim().toLowerCase() === "free delivery"
+  );
+}
+
 exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
   return new Promise((resolve, reject) => {
-    // Get a connection from the pool
     db.collectionofficer.getConnection((err, connection) => {
       if (err) {
         console.error("Error getting connection:", err);
@@ -36,17 +74,29 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
           return reject(new Error("Transaction start failed: " + err.message));
         }
 
-        // Step 1: First, get invoice numbers
         const getInvoiceNumbersQuery = `
-          SELECT id, invNo 
-          FROM market_place.processorders 
-          WHERE id IN (?)
+          SELECT
+            po.id,
+            po.invNo,
+            po.paymentMethod,
+            po.creditPaid,
+            po.moneyPaid,
+            po.orderId,
+            o.fullTotal,
+            o.deliveryCharge AS currentDeliveryCharge,
+            o.buildingType,
+            o.isCoupon,
+            o.couponType,
+            o.userId
+          FROM market_place.processorders po
+          JOIN market_place.orders o ON po.orderId = o.id
+          WHERE po.id IN (?)
         `;
 
         connection.query(
           getInvoiceNumbersQuery,
           [orderIds],
-          (error, invoiceResult) => {
+          async (error, invoiceResult) => {
             if (error) {
               connection.release();
               return reject(
@@ -67,207 +117,650 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               invNo: row.invNo,
             }));
 
-            // Step 2: Update processorders
-            const updateProcessOrdersQuery = `
-            UPDATE market_place.processorders 
-            SET status = 'Return'
-            WHERE id IN (?)
-          `;
+            try {
+              const relevantRows = invoiceResult.filter((row) => {
+                const pm = (row.paymentMethod || "").toLowerCase();
+                return pm === "cash" || pm === "card";
+              });
 
-            connection.query(
-              updateProcessOrdersQuery,
-              [orderIds],
-              (error, processOrdersResult) => {
-                if (error) {
-                  return connection.rollback(() => {
-                    connection.release();
-                    reject(
-                      new Error(
-                        "Failed to update process orders: " + error.message,
-                      ),
+              const houseOrderIds = [];
+              const apartmentOrderIds = [];
+              const unknownBuildingTypeOrders = [];
+
+              relevantRows.forEach((row) => {
+                const kind = normalizeBuildingType(row.buildingType);
+                if (kind === "house") houseOrderIds.push(row.orderId);
+                else if (kind === "apartment")
+                  apartmentOrderIds.push(row.orderId);
+                else unknownBuildingTypeOrders.push(row);
+              });
+
+              if (unknownBuildingTypeOrders.length > 0) {
+                console.warn(
+                  "[submitReturn] Unrecognized buildingType, falling back to stored deliveryCharge for:",
+                  unknownBuildingTypeOrders.map((o) => ({
+                    orderId: o.orderId,
+                    buildingType: o.buildingType,
+                  })),
+                );
+              }
+
+              const orderIdToCity = {};
+
+              if (houseOrderIds.length > 0) {
+                const houseRows = await queryAsync(
+                  connection,
+                  `SELECT orderId, city FROM market_place.orderhouse WHERE orderId IN (?)`,
+                  [houseOrderIds],
+                );
+                houseRows.forEach((row) => {
+                  orderIdToCity[row.orderId] = row.city;
+                });
+              }
+
+              if (apartmentOrderIds.length > 0) {
+                const apartmentRows = await queryAsync(
+                  connection,
+                  `SELECT orderId, city FROM market_place.orderapartment WHERE orderId IN (?)`,
+                  [apartmentOrderIds],
+                );
+                apartmentRows.forEach((row) => {
+                  orderIdToCity[row.orderId] = row.city;
+                });
+              }
+
+              const cities = [
+                ...new Set(Object.values(orderIdToCity).filter(Boolean)),
+              ];
+              const cityToCharge = {};
+
+              if (cities.length > 0) {
+                const chargeRows = await queryAsync(
+                  connection,
+                  `SELECT city, charge FROM collection_officer.deliverycharge WHERE city IN (?)`,
+                  [cities],
+                );
+
+                chargeRows.forEach((row) => {
+                  if (cityToCharge[row.city] !== undefined) {
+                    console.warn(
+                      `[submitReturn] Multiple deliverycharge rows for city "${row.city}" — using first match (${cityToCharge[row.city]}), ignoring ${row.charge}.`,
                     );
+                    return;
+                  }
+                  cityToCharge[row.city] = row.charge;
+                });
+              }
+
+              const creditBalanceDeltaByUser = {};
+              const creditBalanceBreakdown = [];
+              const cashProcessOrderIds = [];
+
+              invoiceResult.forEach((row) => {
+                const paymentMethod = (row.paymentMethod || "").toLowerCase();
+                const oldDeliveryCharge =
+                  Number(row.currentDeliveryCharge) || 0;
+                const city = orderIdToCity[row.orderId];
+                const cityCharge = city ? cityToCharge[city] : undefined;
+                const freeDelivery = isFreeDeliveryCoupon(row);
+
+                const resolvedTodaysDeliveryCharge =
+                  cityCharge !== undefined
+                    ? Number(cityCharge)
+                    : oldDeliveryCharge;
+
+                // If a free-delivery coupon applies, the delivery-charge component
+                // is excluded entirely from the handling-fee base and from the
+                // creditBalance delta, and the orders.deliveryCharge column must
+                // NOT be corrected for this order.
+                const todaysDeliveryCharge = freeDelivery
+                  ? 0
+                  : resolvedTodaysDeliveryCharge;
+
+                if (paymentMethod === "cash") {
+                  cashProcessOrderIds.push(row.id);
+
+                  const orderValue =
+                    (Number(row.fullTotal) || 0) - oldDeliveryCharge;
+                  const orderAmountWithTodaysDelivery =
+                    orderValue + todaysDeliveryCharge;
+                  const handlingFee = getHandlingFee(
+                    orderAmountWithTodaysDelivery,
+                  );
+                  const creditPaid = Number(row.creditPaid) || 0;
+
+                  let delta = -(todaysDeliveryCharge + handlingFee);
+                  if (creditPaid > 0) delta += creditPaid;
+
+                  creditBalanceDeltaByUser[row.userId] =
+                    (creditBalanceDeltaByUser[row.userId] || 0) + delta;
+
+                  creditBalanceBreakdown.push({
+                    processOrderId: row.id,
+                    orderId: row.orderId,
+                    userId: row.userId,
+                    paymentMethod: row.paymentMethod,
+                    fullTotal: row.fullTotal,
+                    oldDeliveryCharge,
+                    todaysDeliveryCharge,
+                    isFreeDeliveryCoupon: freeDelivery,
+                    // used to decide whether orders.deliveryCharge should be corrected
+                    resolvedTodaysDeliveryCharge,
+                    handlingFee,
+                    creditPaid,
+                    creditBalanceDelta: delta,
                   });
+                  return;
                 }
 
-                if (processOrdersResult.affectedRows === 0) {
-                  return connection.rollback(() => {
-                    connection.release();
-                    reject(new Error("No orders updated in processorders"));
+                if (paymentMethod === "card") {
+                  const orderValue =
+                    (Number(row.fullTotal) || 0) - oldDeliveryCharge;
+                  const orderAmountWithTodaysDelivery =
+                    orderValue + todaysDeliveryCharge;
+                  const handlingFee = getHandlingFee(
+                    orderAmountWithTodaysDelivery,
+                  );
+                  const moneyPaid = Number(row.moneyPaid) || 0;
+                  const creditPaid = Number(row.creditPaid) || 0;
+
+                  let delta = moneyPaid - todaysDeliveryCharge - handlingFee;
+                  if (creditPaid > 0) delta += creditPaid;
+
+                  creditBalanceDeltaByUser[row.userId] =
+                    (creditBalanceDeltaByUser[row.userId] || 0) + delta;
+
+                  creditBalanceBreakdown.push({
+                    processOrderId: row.id,
+                    orderId: row.orderId,
+                    userId: row.userId,
+                    paymentMethod: row.paymentMethod,
+                    fullTotal: row.fullTotal,
+                    moneyPaid,
+                    oldDeliveryCharge,
+                    todaysDeliveryCharge,
+                    isFreeDeliveryCoupon: freeDelivery,
+                    resolvedTodaysDeliveryCharge,
+                    handlingFee,
+                    creditPaid,
+                    creditBalanceDelta: delta,
                   });
+                  return;
                 }
 
-                // Step 3: Get driver order
-                const getDriverOrdersQuery = `
-                  SELECT id 
-                  FROM collection_officer.driverorders 
-                  WHERE orderId IN (?)
-                `;
+                creditBalanceBreakdown.push({
+                  processOrderId: row.id,
+                  orderId: row.orderId,
+                  userId: row.userId,
+                  paymentMethod: row.paymentMethod,
+                  creditBalanceDelta: 0,
+                  note: `Skipped - unsupported payment method (${row.paymentMethod})`,
+                });
+              });
 
-                connection.query(
-                  getDriverOrdersQuery,
-                  [orderIds],
-                  (error, driverOrdersResult) => {
-                    if (error) {
-                      return connection.rollback(() => {
-                        connection.release();
-                        reject(
-                          new Error(
-                            "Failed to fetch driver orders: " + error.message,
-                          ),
-                        );
-                      });
-                    }
+              const updateProcessOrdersQuery =
+                cashProcessOrderIds.length > 0
+                  ? `
+                    UPDATE market_place.processorders
+                    SET status = 'Return',
+                        isPaid = CASE WHEN id IN (?) THEN 0 ELSE isPaid END
+                    WHERE id IN (?)
+                  `
+                  : `
+                    UPDATE market_place.processorders
+                    SET status = 'Return'
+                    WHERE id IN (?)
+                  `;
 
-                    if (driverOrdersResult.length === 0) {
-                      return connection.rollback(() => {
-                        connection.release();
-                        reject(new Error("No driver orders found"));
-                      });
-                    }
+              const updateProcessOrdersParams =
+                cashProcessOrderIds.length > 0
+                  ? [cashProcessOrderIds, orderIds]
+                  : [orderIds];
 
-                    const driverOrderIds = driverOrdersResult.map(
-                      (row) => row.id,
-                    );
+              connection.query(
+                updateProcessOrdersQuery,
+                updateProcessOrdersParams,
+                (error, processOrdersResult) => {
+                  if (error) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      reject(
+                        new Error(
+                          "Failed to update process orders: " + error.message,
+                        ),
+                      );
+                    });
+                  }
 
-                    // Step 3.5: Check if any drvOrderId already exists in driverreturnorders
-                    const checkExistingReturnsQuery = `
-                      SELECT drvOrderId 
-                      FROM collection_officer.driverreturnorders 
-                      WHERE drvOrderId IN (?)
-                    `;
+                  if (processOrdersResult.affectedRows === 0) {
+                    return connection.rollback(() => {
+                      connection.release();
+                      reject(new Error("No orders updated in processorders"));
+                    });
+                  }
 
-                    connection.query(
-                      checkExistingReturnsQuery,
-                      [driverOrderIds],
-                      (error, existingReturnsResult) => {
-                        if (error) {
-                          return connection.rollback(() => {
-                            connection.release();
-                            reject(
-                              new Error(
-                                "Failed to check existing returns: " +
-                                error.message,
-                              ),
-                            );
-                          });
-                        }
+                  const getDriverOrdersQuery = `
+                    SELECT id 
+                    FROM collection_officer.driverorders 
+                    WHERE orderId IN (?)
+                  `;
 
-                        if (existingReturnsResult.length > 0) {
-                          return connection.rollback(() => {
-                            connection.release();
-                            reject(
-                              new Error("Order has already been returned."),
-                            );
-                          });
-                        }
+                  connection.query(
+                    getDriverOrdersQuery,
+                    [orderIds],
+                    (error, driverOrdersResult) => {
+                      if (error) {
+                        return connection.rollback(() => {
+                          connection.release();
+                          reject(
+                            new Error(
+                              "Failed to fetch driver orders: " + error.message,
+                            ),
+                          );
+                        });
+                      }
 
-                        // Step 4: Update driver orders
-                        const updateDriverOrdersQuery = `
-                          UPDATE collection_officer.driverorders 
-                          SET drvStatus = 'Return'
-                          WHERE id IN (?)
-                        `;
+                      if (driverOrdersResult.length === 0) {
+                        return connection.rollback(() => {
+                          connection.release();
+                          reject(new Error("No driver orders found"));
+                        });
+                      }
 
-                        connection.query(
-                          updateDriverOrdersQuery,
-                          [driverOrderIds],
-                          (error, updateDriverResult) => {
-                            if (error) {
-                              return connection.rollback(() => {
-                                connection.release();
-                                reject(
-                                  new Error(
-                                    "Failed to update driver orders: " +
-                                    error.message,
-                                  ),
-                                );
+                      const driverOrderIds = driverOrdersResult.map(
+                        (row) => row.id,
+                      );
+
+                      const checkExistingReturnsQuery = `
+                        SELECT drvOrderId 
+                        FROM collection_officer.driverreturnorders 
+                        WHERE drvOrderId IN (?)
+                      `;
+
+                      connection.query(
+                        checkExistingReturnsQuery,
+                        [driverOrderIds],
+                        (error, existingReturnsResult) => {
+                          if (error) {
+                            return connection.rollback(() => {
+                              connection.release();
+                              reject(
+                                new Error(
+                                  "Failed to check existing returns: " +
+                                  error.message,
+                                ),
+                              );
+                            });
+                          }
+
+                          if (existingReturnsResult.length > 0) {
+                            return connection.rollback(() => {
+                              connection.release();
+                              reject(
+                                new Error("Order has already been returned."),
+                              );
+                            });
+                          }
+
+                          const getPayoutsQuery = `
+  SELECT 
+    do.id AS driverOrderId,
+    dcs.slvPayout
+  FROM collection_officer.driverorders do
+  INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+  INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
+  LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
+  WHERE do.id IN (?)
+`;
+
+                          connection.query(
+                            getPayoutsQuery,
+                            [driverOrderIds],
+                            (error, payoutResults) => {
+                              if (error) {
+                                return connection.rollback(() => {
+                                  connection.release();
+                                  reject(
+                                    new Error(
+                                      "Failed to fetch driver category payouts: " +
+                                      error.message,
+                                    ),
+                                  );
+                                });
+                              }
+
+                              if (payoutResults.length === 0) {
+                                return connection.rollback(() => {
+                                  connection.release();
+                                  reject(
+                                    new Error(
+                                      "Could not resolve driver category payout for the given orders.",
+                                    ),
+                                  );
+                                });
+                              }
+
+                              const earnPriceByDriverOrderId = {};
+                              payoutResults.forEach((row) => {
+                                const payout = Number(row.slvPayout) || 0;
+                                earnPriceByDriverOrderId[row.driverOrderId] =
+                                  payout * 0.95;
                               });
-                            }
 
-                            // Step 5: Insert into driverreturnorders table
-                            const insertReturnOrdersQuery = `
-                              INSERT INTO collection_officer.driverreturnorders 
-                              (drvOrderId, returnReasonId, note)
-                              VALUES ?
-                            `;
+                              const earnPriceCaseParts = driverOrderIds
+                                .map(
+                                  (id) =>
+                                    `WHEN ${connection.escape(id)} THEN ${connection.escape(
+                                      earnPriceByDriverOrderId[id] !== undefined
+                                        ? earnPriceByDriverOrderId[id]
+                                        : 0,
+                                    )}`,
+                                )
+                                .join(" ");
 
-                            const returnOrdersData = driverOrderIds.map(
-                              (drvOrderId) => [
-                                drvOrderId,
-                                returnReasonId,
-                                note,
-                              ],
-                            );
+                              const updateDriverOrdersQuery = `
+                                UPDATE collection_officer.driverorders 
+                                SET 
+                                  drvStatus = 'Return',
+                                  earnPrice = CASE id ${earnPriceCaseParts} END
+                                WHERE id IN (?)
+                              `;
 
-                            connection.query(
-                              insertReturnOrdersQuery,
-                              [returnOrdersData],
-                              (error, insertResult) => {
-                                if (error) {
-                                  return connection.rollback(() => {
-                                    connection.release();
-                                    reject(
-                                      new Error(
-                                        "Failed to insert return orders: " +
-                                        error.message,
-                                      ),
-                                    );
-                                  });
-                                }
-
-                                // Commit transaction
-                                connection.commit((err) => {
-                                  if (err) {
+                              connection.query(
+                                updateDriverOrdersQuery,
+                                [driverOrderIds],
+                                (error, updateDriverResult) => {
+                                  if (error) {
                                     return connection.rollback(() => {
                                       connection.release();
                                       reject(
                                         new Error(
-                                          "Transaction commit failed: " +
-                                          err.message,
+                                          "Failed to update driver orders: " +
+                                          error.message,
                                         ),
                                       );
                                     });
                                   }
 
-                                  connection.release();
+                                  const insertReturnOrdersQuery = `
+                                    INSERT INTO collection_officer.driverreturnorders 
+                                    (drvOrderId, returnReasonId, note)
+                                    VALUES ?
+                                  `;
 
-                                  resolve({
-                                    processOrdersUpdated:
-                                      processOrdersResult.affectedRows,
-                                    driverOrdersUpdated:
-                                      updateDriverResult.affectedRows,
-                                    returnOrdersInserted:
-                                      insertResult.affectedRows,
-                                    driverOrderIds,
-                                    invoiceNumbers,
-                                    orderDetails,
-                                  });
-                                });
-                              },
-                            );
-                          },
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-            );
+                                  const returnOrdersData = driverOrderIds.map(
+                                    (drvOrderId) => [
+                                      drvOrderId,
+                                      returnReasonId,
+                                      note,
+                                    ],
+                                  );
+
+                                  connection.query(
+                                    insertReturnOrdersQuery,
+                                    [returnOrdersData],
+                                    async (error, insertResult) => {
+                                      if (error) {
+                                        return connection.rollback(() => {
+                                          connection.release();
+                                          reject(
+                                            new Error(
+                                              "Failed to insert return orders: " +
+                                              error.message,
+                                            ),
+                                          );
+                                        });
+                                      }
+
+                                      let creditBalanceUpdateResults = [];
+                                      try {
+                                        creditBalanceUpdateResults =
+                                          await Promise.all(
+                                            Object.entries(
+                                              creditBalanceDeltaByUser,
+                                            ).map(async ([uid, delta]) => {
+                                              if (delta === 0) return null;
+
+                                              const numericUserId = Number(uid);
+                                              const result = await queryAsync(
+                                                connection,
+                                                `UPDATE market_place.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
+                                                [delta, numericUserId],
+                                              );
+
+                                              if (result.affectedRows === 0) {
+                                                console.warn(
+                                                  `[submitReturn][creditBalance update] ⚠️ No row matched for marketplaceusers.id = ${numericUserId} — creditBalance was NOT updated.`,
+                                                );
+                                              }
+
+                                              return {
+                                                userId: numericUserId,
+                                                delta,
+                                                affectedRows:
+                                                  result.affectedRows,
+                                                changedRows: result.changedRows,
+                                              };
+                                            }),
+                                          );
+                                        creditBalanceUpdateResults =
+                                          creditBalanceUpdateResults.filter(
+                                            Boolean,
+                                          );
+                                      } catch (creditErr) {
+                                        return connection.rollback(() => {
+                                          connection.release();
+                                          console.error(
+                                            "[submitReturn] Failed to update creditBalance:",
+                                            creditErr,
+                                          );
+                                          reject(
+                                            new Error(
+                                              "Failed to update creditBalance: " +
+                                              creditErr.message,
+                                            ),
+                                          );
+                                        });
+                                      }
+
+                                      let deliveryChargeUpdateResults = [];
+                                      try {
+                                        // Only correct orders.deliveryCharge for
+                                        // Cash/Card rows that are NOT free-delivery
+                                        // coupon orders.
+                                        const cashOrCardBreakdownRows =
+                                          creditBalanceBreakdown.filter((b) => {
+                                            const pm = (
+                                              b.paymentMethod || ""
+                                            ).toLowerCase();
+                                            return (
+                                              (pm === "cash" ||
+                                                pm === "card") &&
+                                              b.resolvedTodaysDeliveryCharge !==
+                                              undefined &&
+                                              !b.isFreeDeliveryCoupon
+                                            );
+                                          });
+
+                                        deliveryChargeUpdateResults =
+                                          await Promise.all(
+                                            cashOrCardBreakdownRows.map(
+                                              async (b) => {
+                                                const result = await queryAsync(
+                                                  connection,
+                                                  `UPDATE market_place.orders SET deliveryCharge = ? WHERE id = ?`,
+                                                  [
+                                                    b.resolvedTodaysDeliveryCharge,
+                                                    b.orderId,
+                                                  ],
+                                                );
+                                                return {
+                                                  orderId: b.orderId,
+                                                  newCharge:
+                                                    b.resolvedTodaysDeliveryCharge,
+                                                  affectedRows:
+                                                    result.affectedRows,
+                                                  changedRows:
+                                                    result.changedRows,
+                                                };
+                                              },
+                                            ),
+                                          );
+                                      } catch (dcErr) {
+                                        return connection.rollback(() => {
+                                          connection.release();
+                                          console.error(
+                                            "[submitReturn] Failed to update deliveryCharge:",
+                                            dcErr,
+                                          );
+                                          reject(
+                                            new Error(
+                                              "Failed to update deliveryCharge: " +
+                                              dcErr.message,
+                                            ),
+                                          );
+                                        });
+                                      }
+
+                                      // ── NEW: persist handling fee per returned processOrder ──
+                                      // orderhandlingfee.orderId references market_place.processorders.id
+                                      let handlingFeeInsertResults = [];
+                                      try {
+                                        const handlingFeeRows =
+                                          creditBalanceBreakdown.filter(
+                                            (b) => b.handlingFee !== undefined,
+                                          );
+
+                                        if (handlingFeeRows.length > 0) {
+                                          const insertHandlingFeeQuery = `
+                                            INSERT INTO collection_officer.orderhandlingfee
+                                            (orderId, fee, createdAt)
+                                            VALUES ?
+                                          `;
+
+                                          const handlingFeeData =
+                                            handlingFeeRows.map((b) => [
+                                              b.processOrderId,
+                                              b.handlingFee,
+                                              new Date(),
+                                            ]);
+
+                                          const hfResult = await queryAsync(
+                                            connection,
+                                            insertHandlingFeeQuery,
+                                            [handlingFeeData],
+                                          );
+
+                                          handlingFeeInsertResults =
+                                            handlingFeeRows.map((b) => ({
+                                              processOrderId: b.processOrderId,
+                                              fee: b.handlingFee,
+                                            }));
+
+                                          if (
+                                            hfResult.affectedRows !==
+                                            handlingFeeRows.length
+                                          ) {
+                                            console.warn(
+                                              `[submitReturn][orderhandlingfee insert] ⚠️ Expected ${handlingFeeRows.length} rows inserted, got ${hfResult.affectedRows}.`,
+                                            );
+                                          }
+                                        }
+                                      } catch (hfErr) {
+                                        return connection.rollback(() => {
+                                          connection.release();
+                                          console.error(
+                                            "[submitReturn] Failed to insert orderhandlingfee:",
+                                            hfErr,
+                                          );
+                                          reject(
+                                            new Error(
+                                              "Failed to save handling fee: " +
+                                              hfErr.message,
+                                            ),
+                                          );
+                                        });
+                                      }
+
+                                      connection.commit((err) => {
+                                        if (err) {
+                                          return connection.rollback(() => {
+                                            connection.release();
+                                            reject(
+                                              new Error(
+                                                "Transaction commit failed: " +
+                                                err.message,
+                                              ),
+                                            );
+                                          });
+                                        }
+
+                                        connection.release();
+
+                                        resolve({
+                                          processOrdersUpdated:
+                                            processOrdersResult.affectedRows,
+                                          driverOrdersUpdated:
+                                            updateDriverResult.affectedRows,
+                                          returnOrdersInserted:
+                                            insertResult.affectedRows,
+                                          driverOrderIds,
+                                          invoiceNumbers,
+                                          orderDetails,
+                                          creditBalanceUpdateResults,
+                                          creditBalanceBreakdown,
+                                          deliveryChargeUpdateResults,
+                                          handlingFeeInsertResults,
+                                        });
+                                      });
+                                    },
+                                  );
+                                },
+                              );
+                            },
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
+              );
+            } catch (asyncErr) {
+              connection.rollback(() => {
+                connection.release();
+              });
+              console.error(
+                "[submitReturn] Error resolving city/delivery-charge:",
+                asyncErr,
+              );
+              reject(
+                new Error(
+                  "Failed to resolve delivery charges: " + asyncErr.message,
+                ),
+              );
+            }
           },
         );
       });
     });
   });
 };
-
 // Get Driver's Return Orders
+
+function isFreeDeliveryCoupon(row) {
+  return (
+    !!row.isCoupon &&
+    (row.couponType || "").toString().trim().toLowerCase() === "free delivery"
+  );
+}
+
 exports.getDriverReturnOrdersDAO = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
       SELECT 
         do.id as driverOrderId,
         do.drvStatus,
-        do.isHandOver,
+        dom.isHandOver,
         do.createdAt as driverOrderCreatedAt,
         
         -- Process Order Details
@@ -277,6 +770,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         po.isPaid,
         po.status as processStatus,
         po.paymentMethod,
+        po.creditPaid,
         
         -- Order Details
         o.id as orderId,
@@ -290,6 +784,9 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         o.buildingType,
         o.total,
         o.fullTotal,
+        o.deliveryCharge,
+        o.isCoupon,
+        o.couponType,
         
         -- User Details
         u.id as userId,
@@ -323,6 +820,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         oa.city as apartment_city
         
       FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       
       -- Join with processorders
       INNER JOIN market_place.processorders po ON do.orderId = po.id
@@ -352,16 +850,16 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
       LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
       LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
       
-      WHERE do.driverId = ?
+      WHERE dom.driverId = ?
         AND do.drvStatus = 'Return'
-        AND (do.isHandOver = 0 OR do.isHandOver IS NULL)
+        AND (dom.isHandOver = 0 OR dom.isHandOver IS NULL)
         
       ORDER BY do.createdAt DESC, po.id DESC
     `;
 
     const params = [driverId];
 
-    db.collectionofficer.query(sql, params, (err, results) => {
+    db.collectionofficer.query(sql, params, async (err, results) => {
       if (err) {
         console.error(
           "Database error fetching driver return orders:",
@@ -382,16 +880,37 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
       const uniqueResults = Array.from(uniqueOrdersMap.values());
 
-      if (uniqueResults.length > 0) {
-        console.log("Sample unique return order data:", {
-          driverOrderId: uniqueResults[0].driverOrderId,
-          drvStatus: uniqueResults[0].drvStatus,
-          isHandOver: uniqueResults[0].isHandOver,
-          processOrderId: uniqueResults[0].processOrderId,
-          invNo: uniqueResults[0].invNo,
-          returnReasonEnglish: uniqueResults[0].returnReasonEnglish,
-          returnNote: uniqueResults[0].returnNote,
-        });
+      const rowCity = (row) => {
+        if (row.buildingType === "House") return row.house_city;
+        if (row.buildingType === "Apartment") return row.apartment_city;
+        return null;
+      };
+
+      const cities = [...new Set(uniqueResults.map(rowCity).filter(Boolean))];
+      const cityToCharge = {};
+
+      try {
+        if (cities.length > 0) {
+          const chargeRows = await new Promise((res, rej) => {
+            db.collectionofficer.query(
+              `SELECT city, charge FROM collection_officer.deliverycharge WHERE city IN (?)`,
+              [cities],
+              (err, rows) => (err ? rej(err) : res(rows)),
+            );
+          });
+
+          chargeRows.forEach((r) => {
+            if (cityToCharge[r.city] === undefined) {
+              cityToCharge[r.city] = r.charge;
+            }
+          });
+        }
+      } catch (chargeErr) {
+        console.error(
+          "Error resolving today's delivery charge:",
+          chargeErr.message,
+        );
+        return reject(new Error("Failed to resolve delivery charges"));
       }
 
       const formattedResults = uniqueResults.map((row) => {
@@ -435,6 +954,27 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
         const customerTitle = row.orderTitle || row.userTitle || "";
 
+        let cashAmountDue = null;
+        const paymentMethod = (row.paymentMethod || "").toLowerCase();
+
+        if (paymentMethod === "cash") {
+          const oldDeliveryCharge = Number(row.deliveryCharge) || 0;
+          const orderValue = (Number(row.fullTotal) || 0) - oldDeliveryCharge;
+          const creditPaid = Number(row.creditPaid) || 0;
+
+          if (isFreeDeliveryCoupon(row)) {
+            cashAmountDue = orderValue - creditPaid;
+          } else {
+            const city = rowCity(row);
+            const todaysDeliveryCharge =
+              city && cityToCharge[city] !== undefined
+                ? Number(cityToCharge[city])
+                : oldDeliveryCharge;
+
+            cashAmountDue = orderValue + todaysDeliveryCharge - creditPaid;
+          }
+        }
+
         // Format the return order
         const formattedOrder = {
           driverOrderId: row.driverOrderId,
@@ -446,6 +986,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
           invoiceNumber: row.invNo,
           amount: row.amount,
           totalAmount: row.fullTotal || row.total,
+          cashAmountDue,
           isPaid: row.isPaid === 1,
           paymentMethod: row.paymentMethod,
           processStatus: row.processStatus,
@@ -504,15 +1045,16 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
         po.invNo,
         po.status as processStatus,
         do.id as driverOrderId,
-        do.driverId,
+        dom.driverId,
         do.drvStatus,
-        do.isHandOver
+        dom.isHandOver
       FROM market_place.processorders po
       INNER JOIN collection_officer.driverorders do ON po.id = do.orderId
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE po.invNo IN (?)
-        AND do.driverId = ?
+        AND dom.driverId = ?
         AND do.drvStatus = 'Return'
-        AND (do.isHandOver = 0 OR do.isHandOver IS NULL)
+        AND (dom.isHandOver = 0 OR dom.isHandOver IS NULL)
     `;
 
     db.collectionofficer.query(
@@ -539,13 +1081,14 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
 
         // Step 2: Update driverorders table - set drvStatus to 'Return Received'
         const updateDriverOrdersSql = `
-          UPDATE collection_officer.driverorders 
+          UPDATE collection_officer.driverorders do
+          INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
           SET 
-            drvStatus = 'Return Received',
-            receivedTime = NOW()
-          WHERE id IN (?)
-            AND driverId = ?
-            AND drvStatus = 'Return'
+            do.drvStatus = 'Return Received',
+            do.receivedTime = NOW()
+          WHERE do.id IN (?)
+            AND dom.driverId = ?
+            AND do.drvStatus = 'Return'
         `;
 
         db.collectionofficer.query(
@@ -581,9 +1124,10 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
               po.status as processStatus,
               do.id as driverOrderId,
               do.drvStatus,
-              do.isHandOver
+              dom.isHandOver
             FROM market_place.processorders po
             INNER JOIN collection_officer.driverorders do ON po.id = do.orderId
+            INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
             WHERE po.id IN (?)
               AND do.id IN (?)
           `;
