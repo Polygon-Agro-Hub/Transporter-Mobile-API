@@ -9,6 +9,7 @@ const {
   admin,
 } = require("./startup/database");
 
+// Create an Express application
 const app = express();
 
 // Base path for the API
