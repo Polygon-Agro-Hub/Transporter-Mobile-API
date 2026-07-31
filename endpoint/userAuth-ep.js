@@ -267,7 +267,6 @@ exports.updateProfileImage = asyncHandler(async (req, res) => {
   }
 });
 
-// Get Driver's Earnings
 exports.getEarnings = asyncHandler(async (req, res) => {
   const driverId = req.user.id;
   const { date } = req.query;

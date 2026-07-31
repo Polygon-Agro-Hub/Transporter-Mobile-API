@@ -1195,8 +1195,9 @@ exports.saveSignatureAndUpdateStatusDAO = async (
 
                   totalDue = orderValue + newDeliveryCharge;
 
-                  // Only correct the deliveryCharge column when no coupon applies
+                  // Only correct the curDlvrCharge column when no coupon applies
                   cashDeliveryChargeUpdates.push({
+                    processOrderId: order.processOrderId,
                     orderId: order.orderId,
                     newDeliveryCharge,
                   });
@@ -1245,6 +1246,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   (creditBalanceDeltaByUser[order.userId] || 0) + delta;
 
                 cardDeliveryChargeCorrections.push({
+                  processOrderId: order.processOrderId,
                   orderId: order.orderId,
                   userId: order.userId,
                   city,
@@ -1408,23 +1410,23 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     );
 
                     cashDeliveryChargeUpdates.forEach(
-                      ({ orderId, newDeliveryCharge }) => {
+                      ({ processOrderId, orderId, newDeliveryCharge }) => {
                         updatePromises.push(
                           new Promise((resolve, reject) => {
                             connection.query(
-                              `UPDATE market_place.orders SET deliveryCharge = ? WHERE id = ?`,
-                              [newDeliveryCharge, orderId],
+                              `UPDATE market_place.processorders SET curDlvrCharge = ? WHERE id = ?`,
+                              [newDeliveryCharge, processOrderId],
                               (err, result) => {
                                 if (err) {
                                   console.error(
-                                    `[cash deliveryCharge update] FAILED for orderId ${orderId}:`,
+                                    `[cash curDlvrCharge update] FAILED for processOrderId ${processOrderId}:`,
                                     err.message,
                                   );
                                   return reject(err);
                                 }
                                 if (result.affectedRows === 0) {
                                   console.warn(
-                                    `[cash deliveryCharge update] ⚠️ No row matched for orders.id = ${orderId}.`,
+                                    `[cash curDlvrCharge update] ⚠️ No row matched for processorders.id = ${processOrderId}.`,
                                   );
                                 }
                                 resolve({
@@ -1469,23 +1471,23 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   }
 
                   cardDeliveryChargeCorrections.forEach(
-                    ({ orderId, correctDeliveryCharge }) => {
+                    ({ processOrderId, orderId, correctDeliveryCharge }) => {
                       updatePromises.push(
                         new Promise((resolve, reject) => {
                           connection.query(
-                            `UPDATE market_place.orders SET deliveryCharge = ? WHERE id = ?`,
-                            [correctDeliveryCharge, orderId],
+                            `UPDATE market_place.processorders SET curDlvrCharge = ? WHERE id = ?`,
+                            [correctDeliveryCharge, processOrderId],
                             (err, result) => {
                               if (err) {
                                 console.error(
-                                  `[Card deliveryCharge update] FAILED for orderId ${orderId}:`,
+                                  `[Card curDlvrCharge update] FAILED for processOrderId ${processOrderId}:`,
                                   err.message,
                                 );
                                 return reject(err);
                               }
                               if (result.affectedRows === 0) {
                                 console.warn(
-                                  `[Card deliveryCharge update] ⚠️ No row matched for orders.id = ${orderId} — deliveryCharge was NOT updated.`,
+                                  `[Card curDlvrCharge update] ⚠️ No row matched for processorders.id = ${processOrderId} — curDlvrCharge was NOT updated.`,
                                 );
                               }
                               resolve({

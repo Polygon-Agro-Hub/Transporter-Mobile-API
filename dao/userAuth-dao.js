@@ -191,6 +191,9 @@ exports.updateProfileImage = async (empId, imageUrl) => {
   }
 };
 
+const isReturnStatus = (status) =>
+  status === "return" || status === "return received";
+
 exports.getEarnings = async (driverId, date) => {
   try {
     const targetDate = date ? date : new Date().toISOString().split("T")[0];
@@ -223,7 +226,7 @@ exports.getEarnings = async (driverId, date) => {
       const status = row.status ? String(row.status).toLowerCase() : "";
 
       // Only finalized orders count toward earnings
-      if (status !== "delivered" && status !== "return") return;
+      if (status !== "delivered" && !isReturnStatus(status)) return;
 
       totalEarnings += earnPrice;
 
@@ -231,7 +234,7 @@ exports.getEarnings = async (driverId, date) => {
         cardEarnings += earnPrice;
         cardOrders++;
       } else if (method === "cash") {
-        if (status === "return") {
+        if (isReturnStatus(status)) {
           cardEarnings += earnPrice;
           cardOrders++;
         } else {
@@ -288,13 +291,13 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
           : "";
         const status = row.status ? String(row.status).toLowerCase() : "";
 
-        if (status !== "delivered" && status !== "return") return null;
+        if (status !== "delivered" && !isReturnStatus(status)) return null;
 
         let effectiveMethod;
         if (method === "card") {
           effectiveMethod = "card";
         } else if (method === "cash") {
-          effectiveMethod = status === "return" ? "card" : "cash";
+          effectiveMethod = isReturnStatus(status) ? "card" : "cash";
         } else {
           effectiveMethod = "cash";
         }
