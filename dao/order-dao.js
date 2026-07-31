@@ -1230,20 +1230,23 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 const newCharge = cityToCharge[city];
                 if (newCharge === undefined) {
                   console.warn(
-                    `[saveSignatureAndUpdateStatusDAO] No deliverycharge entry for city "${city}" (orderId ${order.orderId}) — skipping Card correction.`,
+                    `[saveSignatureAndUpdateStatusDAO] No deliverycharge entry for city "${city}" (orderId ${order.orderId}) — skipping Card curDlvrCharge update.`,
                   );
                   continue;
                 }
 
                 const oldCharge = Number(order.currentDeliveryCharge) || 0;
                 const numericNewCharge = Number(newCharge);
+                const hasDifference = numericNewCharge !== oldCharge;
 
-                if (numericNewCharge === oldCharge) continue;
+                let delta = 0;
 
-                const delta = oldCharge - numericNewCharge;
+                if (hasDifference) {
+                  delta = oldCharge - numericNewCharge;
 
-                creditBalanceDeltaByUser[order.userId] =
-                  (creditBalanceDeltaByUser[order.userId] || 0) + delta;
+                  creditBalanceDeltaByUser[order.userId] =
+                    (creditBalanceDeltaByUser[order.userId] || 0) + delta;
+                }
 
                 cardDeliveryChargeCorrections.push({
                   processOrderId: order.processOrderId,
@@ -1253,6 +1256,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   storedOrderDeliveryCharge: oldCharge,
                   correctDeliveryCharge: numericNewCharge,
                   creditBalanceDelta: delta,
+                  chargeChanged: hasDifference,
                 });
               }
 
