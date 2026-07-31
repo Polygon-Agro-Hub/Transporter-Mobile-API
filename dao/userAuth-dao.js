@@ -28,12 +28,15 @@ exports.loginUser = async (empId, password) => {
     const user = results[0];
 
     if (user.status === "Rejected") {
-      throw new Error("This EMP ID is Rejected");
+      throw new Error("This Employee ID is rejected");
     }
 
-    // Check if user status is "Approved"
+    if (user.status === "Not Approved") {
+      throw new Error("This Employee ID is not approved");
+    }
+
     if (user.status !== "Approved") {
-      throw new Error("EMP ID not approved");
+      throw new Error("Account status is pending verification");
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
@@ -185,5 +188,151 @@ exports.updateProfileImage = async (empId, imageUrl) => {
   } catch (err) {
     console.error("Database error in updateProfileImage:", err.message);
     throw new Error("Failed to update profile image: " + err.message);
+  }
+};
+
+const isReturnStatus = (status) =>
+  status === "return" || status === "return received";
+
+exports.getEarnings = async (driverId, date) => {
+  try {
+    const targetDate = date ? date : new Date().toISOString().split("T")[0];
+    const sql = `
+      SELECT 
+        do.earnPrice,
+        po.paymentMethod,
+        po.status
+      FROM collection_officer.driverorders do
+      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      WHERE dom.driverId = ?
+        AND DATE(do.createdAt) = ?
+    `;
+    const [rows] = await db.collectionofficer
+      .promise()
+      .query(sql, [driverId, targetDate]);
+
+    let totalEarnings = 0;
+    let cashEarnings = 0;
+    let cashOrders = 0;
+    let cardEarnings = 0;
+    let cardOrders = 0;
+
+    rows.forEach((row) => {
+      const earnPrice = Number(row.earnPrice) || 0;
+      const method = row.paymentMethod
+        ? String(row.paymentMethod).toLowerCase()
+        : "";
+      const status = row.status ? String(row.status).toLowerCase() : "";
+
+      // Only finalized orders count toward earnings
+      if (status !== "delivered" && !isReturnStatus(status)) return;
+
+      totalEarnings += earnPrice;
+
+      if (method === "card") {
+        cardEarnings += earnPrice;
+        cardOrders++;
+      } else if (method === "cash") {
+        if (isReturnStatus(status)) {
+          cardEarnings += earnPrice;
+          cardOrders++;
+        } else {
+          cashEarnings += earnPrice;
+          cashOrders++;
+        }
+      }
+    });
+
+    return {
+      todayDate: new Date(targetDate).toISOString(),
+      totalEarnings,
+      cashEarnings,
+      cashOrders,
+      cardEarnings,
+      cardOrders,
+    };
+  } catch (err) {
+    console.error("Database error in getEarnings:", err.message);
+    throw new Error("Failed to fetch earnings: " + err.message);
+  }
+};
+
+exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
+  try {
+    const sql = `
+      SELECT 
+        do.earnPrice,
+        po.invNo,
+        po.paymentMethod,
+        po.status,
+        do.createdAt
+      FROM collection_officer.driverorders do
+      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      WHERE dom.driverId = ?
+        AND DATE(do.createdAt) BETWEEN ? AND ?
+      ORDER BY do.createdAt DESC
+    `;
+    const [rows] = await db.collectionofficer
+      .promise()
+      .query(sql, [driverId, fromDate, toDate]);
+
+    let cashEarnings = 0;
+    let cashOrders = 0;
+    let cardEarnings = 0;
+    let cardOrders = 0;
+
+    const orders = rows
+      .map((row) => {
+        const earnPrice = Number(row.earnPrice) || 0;
+        const method = row.paymentMethod
+          ? String(row.paymentMethod).toLowerCase()
+          : "";
+        const status = row.status ? String(row.status).toLowerCase() : "";
+
+        if (status !== "delivered" && !isReturnStatus(status)) return null;
+
+        let effectiveMethod;
+        if (method === "card") {
+          effectiveMethod = "card";
+        } else if (method === "cash") {
+          effectiveMethod = isReturnStatus(status) ? "card" : "cash";
+        } else {
+          effectiveMethod = "cash";
+        }
+
+        if (effectiveMethod === "cash") {
+          cashEarnings += earnPrice;
+          cashOrders++;
+        } else {
+          cardEarnings += earnPrice;
+          cardOrders++;
+        }
+
+        return {
+          orderId: row.invNo,
+          dateTime: row.createdAt,
+          method: effectiveMethod,
+          status: row.status,
+          earnings: earnPrice,
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      summary: {
+        fromDate,
+        toDate,
+        cashEarnings,
+        cashOrders,
+        cardEarnings,
+        cardOrders,
+      },
+      orders,
+    };
+  } catch (err) {
+    console.error("Database error in getEarningsHistory:", err.message);
+    throw new Error("Failed to fetch earnings history: " + err.message);
   }
 };
