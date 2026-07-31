@@ -60,6 +60,7 @@ function isFreeDeliveryCoupon(row) {
   );
 }
 
+
 exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
   return new Promise((resolve, reject) => {
     db.collectionofficer.getConnection((err, connection) => {
@@ -211,7 +212,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
 
                 // If a free-delivery coupon applies, the delivery-charge component
                 // is excluded entirely from the handling-fee base and from the
-                // creditBalance delta, and the orders.deliveryCharge column must
+                // creditBalance delta, and processorders.curDlvrCharge must
                 // NOT be corrected for this order.
                 const todaysDeliveryCharge = freeDelivery
                   ? 0
@@ -244,7 +245,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                     oldDeliveryCharge,
                     todaysDeliveryCharge,
                     isFreeDeliveryCoupon: freeDelivery,
-                    // used to decide whether orders.deliveryCharge should be corrected
+                    // used to decide whether processorders.curDlvrCharge should be corrected
                     resolvedTodaysDeliveryCharge,
                     handlingFee,
                     creditPaid,
@@ -563,9 +564,10 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                         });
                                       }
 
+                                      // ── Correct processorders.curDlvrCharge ──
                                       let deliveryChargeUpdateResults = [];
                                       try {
-                                        // Only correct orders.deliveryCharge for
+                                        // Only correct processorders.curDlvrCharge for
                                         // Cash/Card rows that are NOT free-delivery
                                         // coupon orders.
                                         const cashOrCardBreakdownRows =
@@ -588,13 +590,14 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                               async (b) => {
                                                 const result = await queryAsync(
                                                   connection,
-                                                  `UPDATE market_place.orders SET deliveryCharge = ? WHERE id = ?`,
+                                                  `UPDATE market_place.processorders SET curDlvrCharge = ? WHERE id = ?`,
                                                   [
                                                     b.resolvedTodaysDeliveryCharge,
-                                                    b.orderId,
+                                                    b.processOrderId,
                                                   ],
                                                 );
                                                 return {
+                                                  processOrderId: b.processOrderId,
                                                   orderId: b.orderId,
                                                   newCharge:
                                                     b.resolvedTodaysDeliveryCharge,
@@ -610,12 +613,12 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                         return connection.rollback(() => {
                                           connection.release();
                                           console.error(
-                                            "[submitReturn] Failed to update deliveryCharge:",
+                                            "[submitReturn] Failed to update curDlvrCharge:",
                                             dcErr,
                                           );
                                           reject(
                                             new Error(
-                                              "Failed to update deliveryCharge: " +
+                                              "Failed to update curDlvrCharge: " +
                                               dcErr.message,
                                             ),
                                           );
@@ -771,6 +774,7 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         po.status as processStatus,
         po.paymentMethod,
         po.creditPaid,
+        po.curDlvrCharge,
         
         -- Order Details
         o.id as orderId,
@@ -880,39 +884,6 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
       const uniqueResults = Array.from(uniqueOrdersMap.values());
 
-      const rowCity = (row) => {
-        if (row.buildingType === "House") return row.house_city;
-        if (row.buildingType === "Apartment") return row.apartment_city;
-        return null;
-      };
-
-      const cities = [...new Set(uniqueResults.map(rowCity).filter(Boolean))];
-      const cityToCharge = {};
-
-      try {
-        if (cities.length > 0) {
-          const chargeRows = await new Promise((res, rej) => {
-            db.collectionofficer.query(
-              `SELECT city, charge FROM collection_officer.deliverycharge WHERE city IN (?)`,
-              [cities],
-              (err, rows) => (err ? rej(err) : res(rows)),
-            );
-          });
-
-          chargeRows.forEach((r) => {
-            if (cityToCharge[r.city] === undefined) {
-              cityToCharge[r.city] = r.charge;
-            }
-          });
-        }
-      } catch (chargeErr) {
-        console.error(
-          "Error resolving today's delivery charge:",
-          chargeErr.message,
-        );
-        return reject(new Error("Failed to resolve delivery charges"));
-      }
-
       const formattedResults = uniqueResults.map((row) => {
         let formattedAddress = "No Address";
         if (row.buildingType === "House") {
@@ -958,21 +929,12 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         const paymentMethod = (row.paymentMethod || "").toLowerCase();
 
         if (paymentMethod === "cash") {
-          const oldDeliveryCharge = Number(row.deliveryCharge) || 0;
-          const orderValue = (Number(row.fullTotal) || 0) - oldDeliveryCharge;
+          const fullTotal = Number(row.fullTotal) || 0;
+          const deliveryCharge = Number(row.deliveryCharge) || 0;
+          const curDlvrCharge = Number(row.curDlvrCharge) || 0;
           const creditPaid = Number(row.creditPaid) || 0;
 
-          if (isFreeDeliveryCoupon(row)) {
-            cashAmountDue = orderValue - creditPaid;
-          } else {
-            const city = rowCity(row);
-            const todaysDeliveryCharge =
-              city && cityToCharge[city] !== undefined
-                ? Number(cityToCharge[city])
-                : oldDeliveryCharge;
-
-            cashAmountDue = orderValue + todaysDeliveryCharge - creditPaid;
-          }
+          cashAmountDue = fullTotal - deliveryCharge + curDlvrCharge - creditPaid;
         }
 
         // Format the return order

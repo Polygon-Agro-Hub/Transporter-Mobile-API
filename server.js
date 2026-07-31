@@ -11,6 +11,7 @@ const {
 
 const app = express();
 
+// Base path for the API
 const BASE_PATH = "/transporter";
 
 // CORS configuration

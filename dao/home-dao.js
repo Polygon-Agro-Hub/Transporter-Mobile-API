@@ -10,7 +10,7 @@ exports.getAmount = async (driverId) => {
             CASE 
               WHEN po.paymentMethod = 'Cash' 
                    AND do.drvStatus = 'Completed'
-              THEN o.fullTotal 
+              THEN COALESCE(po.moneyPaid, 0)
               ELSE 0 
             END
           ), 0
@@ -275,6 +275,7 @@ exports.getAmount = async (driverId) => {
   });
 };
 
+
 exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -282,18 +283,11 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
                 do.id as driverOrderId,
                 do.orderId as processOrderId,
                 po.invNo as invoNo,
-                po.creditPaid,
-                COALESCE(o.fullTotal, 0) as fullTotal,
-                COALESCE(o.deliveryCharge, 0) as deliveryCharge,
-                o.buildingType,
-                o.isCoupon,
-                o.couponType,
+                po.moneyPaid,
                 COALESCE(do.earnPrice, 0) as earned,
                 do.createdAt,
                 dom.driverId,
-                o.id as orderId,
-                oh.city as house_city,
-                oa.city as apartment_city
+                o.id as orderId
             FROM 
                 collection_officer.driverorders do
             INNER JOIN 
@@ -302,16 +296,12 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
                 market_place.processorders po ON do.orderId = po.id
             INNER JOIN 
                 market_place.orders o ON po.orderId = o.id
-            LEFT JOIN
-                market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
-            LEFT JOIN
-                market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
             WHERE 
                 dom.driverId = ?
                 AND dom.isHandOver = 0
                 AND do.drvStatus = 'Completed'
-                AND o.fullTotal IS NOT NULL
-                AND o.fullTotal > 0
+                AND po.moneyPaid IS NOT NULL
+                AND po.moneyPaid > 0
                 AND po.paymentMethod = ?  
             ORDER BY 
                 do.createdAt DESC
@@ -320,74 +310,18 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
     db.collectionofficer.query(
       sql,
       [driverId, paymentMethod],
-      async (err, results) => {
+      (err, results) => {
         if (err) {
           console.error("Database error fetching amount:", err.message);
           return reject(new Error("Failed to fetch amount"));
         }
 
-        const rowCity = (row) => {
-          if (row.buildingType === "House") return row.house_city;
-          if (row.buildingType === "Apartment") return row.apartment_city;
-          return null;
-        };
-
-        const isFreeDeliveryCoupon = (row) =>
-          !!row.isCoupon &&
-          (row.couponType || "").toString().trim().toLowerCase() ===
-          "free delivery";
-
-        const cities = [...new Set(results.map(rowCity).filter(Boolean))];
-        const cityToCharge = {};
-
-        try {
-          if (cities.length > 0) {
-            const chargeRows = await new Promise((res, rej) => {
-              db.collectionofficer.query(
-                `SELECT city, charge FROM collection_officer.deliverycharge WHERE city IN (?)`,
-                [cities],
-                (err, rows) => (err ? rej(err) : res(rows)),
-              );
-            });
-
-            chargeRows.forEach((r) => {
-              if (cityToCharge[r.city] === undefined) {
-                cityToCharge[r.city] = r.charge;
-              }
-            });
-          }
-        } catch (chargeErr) {
-          console.error(
-            "Error resolving today's delivery charge:",
-            chargeErr.message,
-          );
-          return reject(new Error("Failed to resolve delivery charges"));
-        }
-
         const formattedResults = results.map((item) => {
-          const oldDeliveryCharge = Number(item.deliveryCharge) || 0;
-          const orderValue = (Number(item.fullTotal) || 0) - oldDeliveryCharge;
-          const creditPaid = Number(item.creditPaid) || 0;
-
-          let computedAmount;
-
-          if (isFreeDeliveryCoupon(item)) {
-            computedAmount = orderValue - creditPaid;
-          } else {
-            const city = rowCity(item);
-            const todaysDeliveryCharge =
-              city && cityToCharge[city] !== undefined
-                ? Number(cityToCharge[city])
-                : oldDeliveryCharge;
-
-            computedAmount = orderValue + todaysDeliveryCharge - creditPaid;
-          }
-
           return {
             id: String(item.driverOrderId),
             orderId: item.processOrderId,
             invoNo: item.invoNo,
-            amount: computedAmount,
+            amount: Number(item.moneyPaid) || 0,
             earned: parseFloat(item.earned) || 0,
             selected: false,
             createdAt: item.createdAt,
@@ -399,6 +333,8 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
     );
   });
 };
+
+
 
 exports.getDriverDistributedCenter = async (driverId) => {
   return new Promise((resolve, reject) => {
