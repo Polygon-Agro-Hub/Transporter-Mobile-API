@@ -8,7 +8,6 @@ const {
   marketPlace,
   admin,
 } = require("./startup/database");
-
 const app = express();
 
 // Base path for the API
