@@ -8,7 +8,6 @@ const {
   marketPlace,
   admin,
 } = require("./startup/database");
-
 const app = express();
 
 // Base path for the API
@@ -78,7 +77,7 @@ app.use((err, req, res, next) => {
   res.status(500).send("Something broke!!");
 });
 
-// Start server
+// Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);

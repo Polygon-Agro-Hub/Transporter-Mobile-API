@@ -293,6 +293,7 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
 
         if (status !== "delivered" && !isReturnStatus(status)) return null;
 
+        // effectiveMethod is ONLY used for the earnings summary totals
         let effectiveMethod;
         if (method === "card") {
           effectiveMethod = "card";
@@ -313,7 +314,7 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
         return {
           orderId: row.invNo,
           dateTime: row.createdAt,
-          method: effectiveMethod,
+          method: method || "cash",
           status: row.status,
           earnings: earnPrice,
         };
