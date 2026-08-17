@@ -257,6 +257,8 @@ exports.getDriverOrdersDAO = async (
         o.phonecode1,
         o.phone2,
         o.phonecode2,
+        o.longitude,
+        o.latitude,
         oh.houseNo as house_houseNo,
         oh.streetName as house_streetName,
         oh.city as house_city,
@@ -382,6 +384,8 @@ exports.getDriverOrdersDAO = async (
             image: order.image,
             buildingType: order.buildingType,
             fullName: order.fullName,
+            longitude: order.longitude,
+            latitude: order.latitude,
             phone1: order.phone1,
             phonecode1: order.phonecode1,
             phone2: order.phone2,
@@ -544,6 +548,8 @@ exports.getDriverOrdersDAO = async (
             phoneNumber: group.phoneNumber,
             image: group.image,
             buildingType: group.buildingType,
+            longitude: group.longitude || null,
+            latitude: group.latitude || null,
             address: formattedAddress,
             addressDetails: group.addressDetails,
             phoneNumbers: [group.phone1, group.phone2]
@@ -1767,4 +1773,26 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
     console.error("Error in reStartJourneyDAO:", error);
     throw error;
   }
+};
+
+// Get Distribution Center by ID
+exports.getDistributedCenterById = async (centerId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT id, centerName, city, district, province, country, longitude, latitude
+      FROM collection_officer.distributedcenter
+      WHERE id = ?
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql, [centerId], (err, results) => {
+      if (err) {
+        console.error(
+          "Database error getting distribution centre:",
+          err.message,
+        );
+        return reject(new Error("Failed to retrieve distribution centre"));
+      }
+      resolve(results.length > 0 ? results[0] : null);
+    });
+  });
 };
