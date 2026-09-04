@@ -44,7 +44,7 @@ exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
 
                 const getInvoiceNumbersQuery = `
                     SELECT id, invNo 
-                    FROM market_place.processorders 
+                    FROM collection_officer.processorders 
                     WHERE id IN (?)
                 `;
 
@@ -73,7 +73,7 @@ exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
                         }));
 
                         const updateProcessOrdersQuery = `
-                            UPDATE market_place.processorders 
+                            UPDATE collection_officer.processorders 
                             SET status = 'Hold' 
                             WHERE id IN (?)
                         `;
