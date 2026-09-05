@@ -564,9 +564,6 @@ exports.GetOptimizedRoute = asyncHandler(async (req, res) => {
       });
     }
 
-    console.log(`[GetOptimizedRoute] Driver ID: ${driverId}, Distribution Center ID: ${driverCentre.distributedCenterId}`);
-    console.log(`[GetOptimizedRoute] Distribution Center: "${centre.centerName}", Lat: ${centre.latitude}, Lng: ${centre.longitude}`);
-
     // 3. Get all Todo/Hold/On the way orders with lat/lng
     const statuses = ["Todo", "Hold", "On the way"];
     const orders = await orderDao.getDriverOrdersDAO(
@@ -575,8 +572,6 @@ exports.GetOptimizedRoute = asyncHandler(async (req, res) => {
       0, // isHandOver = 0
       null,
     );
-
-    console.log(`[GetOptimizedRoute] Total orders fetched from DB: ${orders.length}`);
 
     // Filter orders that have valid coordinates
     const deliveries = orders
@@ -599,8 +594,6 @@ exports.GetOptimizedRoute = asyncHandler(async (req, res) => {
         drvStatus: order.drvStatus,
       }));
 
-    console.log(`[GetOptimizedRoute] Valid deliveries with coordinates: ${deliveries.length}`);
-
     if (deliveries.length === 0) {
       console.warn("[GetOptimizedRoute] No valid deliveries with coordinates found.");
       return res.status(200).json({
@@ -620,7 +613,9 @@ exports.GetOptimizedRoute = asyncHandler(async (req, res) => {
     }
 
     // 4. Call the route optimization API
-    const routeApiUrl = process.env.ROUTE_OPTIMIZATION_API_URL;
+    const routeApiUrl =
+      process.env.ROUTE_OPTIMIZATION_API_URL ||
+      "https://vrp-route-optimizer.vercel.app/api/nearest-route/one-way-optimal";
 
     if (!routeApiUrl) {
       console.warn("[GetOptimizedRoute] ROUTE_OPTIMIZATION_API_URL is not configured in .env");
@@ -658,15 +653,7 @@ exports.GetOptimizedRoute = asyncHandler(async (req, res) => {
       google_api_key: "",
     };
 
-    console.log(`[GetOptimizedRoute] Sending POST payload to ${routeApiUrl}:`);
-    console.log(JSON.stringify(routeRequestBody, null, 2));
-
     const routeResponseData = await httpPost(routeApiUrl, routeRequestBody, 30000);
-
-    console.log(`[GetOptimizedRoute] Optimization API Response Status: ${routeResponseData.status}`);
-    console.log(`[GetOptimizedRoute] Routing Type: ${routeResponseData.routing_type}, Algorithm: ${routeResponseData.algorithm}`);
-    console.log(`[GetOptimizedRoute] Total Distance: ${routeResponseData.total_distance_meters} meters, Total Stops: ${routeResponseData.stops ? routeResponseData.stops.length : 0}`);
-
 
     // 5. Map the optimized route back to orders
     const optimizedStops = routeResponseData.stops || [];
@@ -747,29 +734,27 @@ exports.GetOptimizedRoute = asyncHandler(async (req, res) => {
     console.error("Error getting optimized route:", error.message);
 
     // If the route optimization API fails, return orders without optimization
-    if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
-      try {
-        const statuses = ["Todo", "Hold", "On the way"];
-        const orders = await orderDao.getDriverOrdersDAO(
-          driverId,
-          statuses,
-          0,
-          null,
-        );
+    try {
+      const statuses = ["Todo", "Hold", "On the way"];
+      const orders = await orderDao.getDriverOrdersDAO(
+        driverId,
+        statuses,
+        0,
+        null,
+      );
 
-        return res.status(200).json({
-          status: "success",
-          message:
-            "Route optimization service unavailable, returning default order",
-          data: {
-            optimizedRoute: null,
-            orders: orders,
-            totalOrders: orders.length,
-          },
-        });
-      } catch (fallbackError) {
-        console.error("Fallback also failed:", fallbackError);
-      }
+      return res.status(200).json({
+        status: "success",
+        message:
+          "Route optimization service unavailable, returning default order",
+        data: {
+          optimizedRoute: null,
+          orders: orders,
+          totalOrders: orders.length,
+        },
+      });
+    } catch (fallbackError) {
+      console.error("Fallback also failed:", fallbackError);
     }
 
     res.status(500).json({
