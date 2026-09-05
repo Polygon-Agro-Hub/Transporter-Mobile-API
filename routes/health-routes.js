@@ -109,7 +109,6 @@ router.get("/health/detailed", (req, res) => {
     database: {
       plantcare: "checking...",
       collectionofficer: "checking...",
-      marketplace: "checking...",
       admin: "checking...",
       investments: "checking...",
     },

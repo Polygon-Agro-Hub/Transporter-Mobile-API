@@ -177,6 +177,71 @@ router.get('/get-driver-orders', auth, orderEp.GetDriverOrders);
 
 /**
  * @openapi
+ * /api/order/get-optimized-route:
+ *   get:
+ *     tags:
+ *       - Order
+ *     summary: Get Optimized Delivery Route
+ *     description: Calculate the optimized delivery route for the driver's current todo orders using the distribution centre as the starting point and the Nearest-Neighbor algorithm.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Optimized route calculated successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     distributionCenter:
+ *                       type: object
+ *                       properties:
+ *                         id:
+ *                           type: integer
+ *                         name:
+ *                           type: string
+ *                         latitude:
+ *                           type: number
+ *                         longitude:
+ *                           type: number
+ *                     optimizedRoute:
+ *                       type: object
+ *                       properties:
+ *                         routingType:
+ *                           type: string
+ *                         algorithm:
+ *                           type: string
+ *                         totalDistanceMeters:
+ *                           type: number
+ *                         stops:
+ *                           type: array
+ *                           items:
+ *                             type: object
+ *                     optimizedOrders:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                     totalOrders:
+ *                       type: integer
+ *                     optimizedCount:
+ *                       type: integer
+ *       401:
+ *         description: Unauthorized.
+ *       404:
+ *         description: Distribution centre not found.
+ *       500:
+ *         description: Server error.
+ */
+router.get('/get-optimized-route', auth, orderEp.GetOptimizedRoute);
+
+/**
+ * @openapi
  * /api/order/get-order-user-details:
  *   get:
  *     tags:
@@ -539,5 +604,6 @@ router.post('/save-signature',
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/re-start-journey', auth, orderEp.ReStartJourney);
+
 
 module.exports = router;

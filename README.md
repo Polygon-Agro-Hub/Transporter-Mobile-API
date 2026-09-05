@@ -72,7 +72,6 @@ JWT_SECRET=your_jwt_secret_key
 # DATABASE NAMES
 DB_NAME_PC=plant_care
 DB_NAME_CO=collection_officer
-DB_NAME_MP=market_place
 DB_NAME_AD=agro_world_admin
 
 # DATABASE CONFIGURATION

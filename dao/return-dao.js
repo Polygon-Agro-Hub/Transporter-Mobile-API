@@ -89,8 +89,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
             o.isCoupon,
             o.couponType,
             o.userId
-          FROM market_place.processorders po
-          JOIN market_place.orders o ON po.orderId = o.id
+          FROM collection_officer.processorders po
+          JOIN collection_officer.orders o ON po.orderId = o.id
           WHERE po.id IN (?)
         `;
 
@@ -151,7 +151,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               if (houseOrderIds.length > 0) {
                 const houseRows = await queryAsync(
                   connection,
-                  `SELECT orderId, city FROM market_place.orderhouse WHERE orderId IN (?)`,
+                  `SELECT orderId, city FROM collection_officer.orderhouse WHERE orderId IN (?)`,
                   [houseOrderIds],
                 );
                 houseRows.forEach((row) => {
@@ -162,7 +162,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               if (apartmentOrderIds.length > 0) {
                 const apartmentRows = await queryAsync(
                   connection,
-                  `SELECT orderId, city FROM market_place.orderapartment WHERE orderId IN (?)`,
+                  `SELECT orderId, city FROM collection_officer.orderapartment WHERE orderId IN (?)`,
                   [apartmentOrderIds],
                 );
                 apartmentRows.forEach((row) => {
@@ -302,13 +302,13 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               const updateProcessOrdersQuery =
                 cashProcessOrderIds.length > 0
                   ? `
-                    UPDATE market_place.processorders
+                    UPDATE collection_officer.processorders
                     SET status = 'Return',
                         isPaid = CASE WHEN id IN (?) THEN 0 ELSE isPaid END
                     WHERE id IN (?)
                   `
                   : `
-                    UPDATE market_place.processorders
+                    UPDATE collection_officer.processorders
                     SET status = 'Return'
                     WHERE id IN (?)
                   `;
@@ -525,7 +525,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                               const numericUserId = Number(uid);
                                               const result = await queryAsync(
                                                 connection,
-                                                `UPDATE market_place.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
+                                                `UPDATE collection_officer.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
                                                 [delta, numericUserId],
                                               );
 
@@ -590,7 +590,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                               async (b) => {
                                                 const result = await queryAsync(
                                                   connection,
-                                                  `UPDATE market_place.processorders SET curDlvrCharge = ? WHERE id = ?`,
+                                                  `UPDATE collection_officer.processorders SET curDlvrCharge = ? WHERE id = ?`,
                                                   [
                                                     b.resolvedTodaysDeliveryCharge,
                                                     b.processOrderId,
@@ -626,7 +626,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                       }
 
                                       // ── NEW: persist handling fee per returned processOrder ──
-                                      // orderhandlingfee.orderId references market_place.processorders.id
+                                      // orderhandlingfee.orderId references collection_officer.processorders.id
                                       let handlingFeeInsertResults = [];
                                       try {
                                         const handlingFeeRows =
@@ -750,13 +750,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
 };
 // Get Driver's Return Orders
 
-function isFreeDeliveryCoupon(row) {
-  return (
-    !!row.isCoupon &&
-    (row.couponType || "").toString().trim().toLowerCase() === "free delivery"
-  );
-}
-
 exports.getDriverReturnOrdersDAO = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -827,13 +820,13 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       
       -- Join with processorders
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       
       -- Join with orders
-      INNER JOIN market_place.orders o ON po.orderId = o.id
+      INNER JOIN collection_officer.orders o ON po.orderId = o.id
       
       -- Join with marketplaceusers
-      INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
+      INNER JOIN collection_officer.marketplaceusers u ON o.userId = u.id
       
       -- LEFT JOIN with the LATEST driverreturnorders using a subquery
       LEFT JOIN (
@@ -851,8 +844,8 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         AND dro_latest.returnReasonId = dro.returnReasonId
       
       -- LEFT JOIN with address tables
-      LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
-      LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
+      LEFT JOIN collection_officer.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
+      LEFT JOIN collection_officer.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
       
       WHERE dom.driverId = ?
         AND do.drvStatus = 'Return'
@@ -1010,7 +1003,7 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
         dom.driverId,
         do.drvStatus,
         dom.isHandOver
-      FROM market_place.processorders po
+      FROM collection_officer.processorders po
       INNER JOIN collection_officer.driverorders do ON po.id = do.orderId
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE po.invNo IN (?)
@@ -1064,7 +1057,7 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
 
             // Step 3: Update processorders table - set status to 'Return Received'
             const updateProcessOrdersSql = `
-          UPDATE market_place.processorders 
+          UPDATE collection_officer.processorders 
           SET status = 'Return Received'
           WHERE id IN (?)
         `;
@@ -1087,7 +1080,7 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
               do.id as driverOrderId,
               do.drvStatus,
               dom.isHandOver
-            FROM market_place.processorders po
+            FROM collection_officer.processorders po
             INNER JOIN collection_officer.driverorders do ON po.id = do.orderId
             INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
             WHERE po.id IN (?)

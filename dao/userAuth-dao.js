@@ -203,7 +203,7 @@ exports.getEarnings = async (driverId, date) => {
         po.paymentMethod,
         po.status
       FROM collection_officer.driverorders do
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE dom.driverId = ?
         AND DATE(do.createdAt) = ?
@@ -268,7 +268,7 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
         po.status,
         do.createdAt
       FROM collection_officer.driverorders do
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE dom.driverId = ?
         AND DATE(do.createdAt) BETWEEN ? AND ?
