@@ -129,6 +129,34 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
                   );
                 });
 
+                // Insert customer-facing ordernotfication for "Order Collected by Driver"
+                try {
+                  const invNoRows = await new Promise((res, rej) => {
+                    db.collectionofficer.query(
+                      `SELECT invNo FROM collection_officer.processorders WHERE id = ? LIMIT 1`,
+                      [processOrderId],
+                      (err, rows) => {
+                        if (err) return rej(err);
+                        res(rows);
+                      },
+                    );
+                  });
+                  const invNo = invNoRows.length > 0 ? invNoRows[0].invNo : processOrderId;
+                  const collectedMsg = `Your order #${invNo}, has been collected by our driver.`;
+                  await new Promise((res, rej) => {
+                    db.collectionofficer.query(
+                      `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES (?, ?, ?, 0, NOW())`,
+                      [processOrderId, 'Order Collected by Driver', collectedMsg],
+                      (err, result) => {
+                        if (err) return rej(err);
+                        res(result);
+                      },
+                    );
+                  });
+                } catch (notifErr) {
+                  console.error('[SaveDriverOrder] Failed to insert ordernotfication:', notifErr.message);
+                }
+
                 resolve({
                   message: "Order assigned successfully",
                   driverOrderId: insertResult.insertId,
@@ -946,6 +974,26 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                           });
                         }
 
+                        // Insert customer-facing ordernotfication for "Order is On the Way"
+                        if (updatedResults.length > 0) {
+                          const onTheWayNotifValues = updatedResults.map((row) => [
+                            row.processOrderId,
+                            'Order is On the Way',
+                            `Your order #${row.invNo}, is on its way to you. Our driver will deliver your order shortly.`,
+                            0,
+                            new Date(),
+                          ]);
+                          db.collectionofficer.query(
+                            `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
+                            [onTheWayNotifValues],
+                            (errON) => {
+                              if (errON) {
+                                console.error('[startJourneyDAO] Failed to insert ordernotfication:', errON.message);
+                              }
+                            },
+                          );
+                        }
+
                         resolve({
                           success: true,
                           message: "Journey started successfully",
@@ -1588,6 +1636,34 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                               );
                             }
 
+                            // Insert customer-facing ordernotfication for "Order Delivered"
+                            db.collectionofficer.query(
+                              `SELECT id, invNo FROM collection_officer.processorders WHERE id IN (?)`,
+                              [processOrderIds],
+                              (errInv, invRows) => {
+                                if (!errInv && invRows && invRows.length > 0) {
+                                  const deliveredNotifValues = invRows.map((row) => [
+                                    row.id,
+                                    'Order Delivered',
+                                    `Your order #${row.invNo}, has been successfully delivered. We hope you're happy with our service and had a great experience. Thank you for choosing us!`,
+                                    0,
+                                    new Date(),
+                                  ]);
+                                  db.collectionofficer.query(
+                                    `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
+                                    [deliveredNotifValues],
+                                    (errON) => {
+                                      if (errON) {
+                                        console.error('[saveSignatureAndUpdateStatusDAO] Failed to insert ordernotfication:', errON.message);
+                                      }
+                                    },
+                                  );
+                                } else if (errInv) {
+                                  console.error('[saveSignatureAndUpdateStatusDAO] Failed to fetch invNo for ordernotfication:', errInv.message);
+                                }
+                              },
+                            );
+
                             const statusUpdateResult = results.find(
                               (r) => r.type === "status",
                             )?.result;
@@ -1751,6 +1827,29 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
        WHERE id IN (?)`,
       [validOrderIds],
     );
+
+    // Insert customer-facing ordernotfication for "Order is On the Way Again"
+    try {
+      const [invNoRows] = await db.collectionofficer.promise().query(
+        `SELECT id, invNo FROM collection_officer.processorders WHERE id IN (?)`,
+        [validOrderIds],
+      );
+      if (invNoRows && invNoRows.length > 0) {
+        const onTheWayAgainNotifValues = invNoRows.map((row) => [
+          row.id,
+          'Order is On the Way Again',
+          `Your order #${row.invNo}, is back on the way to you. Our driver will deliver your order shortly.`,
+          0,
+          new Date(),
+        ]);
+        await db.collectionofficer.promise().query(
+          `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
+          [onTheWayAgainNotifValues],
+        );
+      }
+    } catch (notifErr) {
+      console.error('[reStartJourneyDAO] Failed to insert ordernotfication:', notifErr.message);
+    }
 
     return {
       success: true,

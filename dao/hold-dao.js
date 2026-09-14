@@ -200,6 +200,33 @@ exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
                                                             // Release connection back to pool
                                                             connection.release();
 
+                                                            // Insert customer-facing ordernotfication for "Order On Hold"
+                                                            db.collectionofficer.query(
+                                                                `SELECT rsnEnglish FROM collection_officer.holdreason WHERE id = ? LIMIT 1`,
+                                                                [holdReasonId],
+                                                                (errRsn, rsnRows) => {
+                                                                    const reasonText = (rsnRows && rsnRows.length > 0)
+                                                                        ? rsnRows[0].rsnEnglish
+                                                                        : (note || 'Order on hold');
+                                                                    const holdNotifValues = invoiceResult.map((row) => [
+                                                                        row.id,
+                                                                        'Order On Hold',
+                                                                        `Your order #${row.invNo}, is currently on hold. Reason : "${reasonText}"`,
+                                                                        0,
+                                                                        new Date(),
+                                                                    ]);
+                                                                    db.collectionofficer.query(
+                                                                        `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
+                                                                        [holdNotifValues],
+                                                                        (errON) => {
+                                                                            if (errON) {
+                                                                                console.error('[submitHold] Failed to insert ordernotfication:', errON.message);
+                                                                            }
+                                                                        },
+                                                                    );
+                                                                },
+                                                            );
+
                                                             resolve({
                                                                 processOrdersUpdated:
                                                                     processOrdersResult.affectedRows,

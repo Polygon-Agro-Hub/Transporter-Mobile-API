@@ -700,6 +700,33 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
 
                                         connection.release();
 
+                                        // Insert customer-facing ordernotfication for "Order Returned"
+                                        db.collectionofficer.query(
+                                          `SELECT rsnEnglish FROM collection_officer.returnreason WHERE id = ? LIMIT 1`,
+                                          [returnReasonId],
+                                          (errRsn, rsnRows) => {
+                                            const reasonText = (rsnRows && rsnRows.length > 0)
+                                              ? rsnRows[0].rsnEnglish
+                                              : (note || 'Returned');
+                                            const returnedNotifValues = invoiceResult.map((row) => [
+                                              row.id,
+                                              'Order Returned',
+                                              `Your order #${row.invNo}, has been returned. Reason : "${reasonText}"`,
+                                              0,
+                                              new Date(),
+                                            ]);
+                                            db.collectionofficer.query(
+                                              `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
+                                              [returnedNotifValues],
+                                              (errON) => {
+                                                if (errON) {
+                                                  console.error('[submitReturn] Failed to insert ordernotfication:', errON.message);
+                                                }
+                                              },
+                                            );
+                                          },
+                                        );
+
                                         resolve({
                                           processOrdersUpdated:
                                             processOrdersResult.affectedRows,
