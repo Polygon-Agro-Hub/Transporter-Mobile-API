@@ -3,17 +3,19 @@ const db = require("../startup/database");
 // Get process order ID by invoice number
 exports.GetProcessOrderInfoByInvNo = async (invNo) => {
   return new Promise((resolve, reject) => {
+    const cleanedInvNo = (invNo || "").toString().trim();
+
     const sql = `
       SELECT 
         id,
         status,
         invNo
       FROM collection_officer.processorders 
-      WHERE invNo = ? 
+      WHERE TRIM(UPPER(invNo)) = TRIM(UPPER(?))
       LIMIT 1
     `;
 
-    db.collectionofficer.query(sql, [invNo], (err, results) => {
+    db.collectionofficer.query(sql, [cleanedInvNo], (err, results) => {
       if (err) {
         console.error("Database error fetching process order:", err.message);
         return reject(new Error("Failed to fetch process order"));
