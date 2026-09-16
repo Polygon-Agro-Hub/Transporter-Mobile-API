@@ -25,6 +25,7 @@ exports.login = asyncHandler(async (req, res) => {
     const payload = {
       empId: result.empId,
       id: result.id,
+      jobRole: result.jobRole,
       passwordUpdated: result.passwordUpdated,
       iat: Math.floor(Date.now() / 1000),
     };
@@ -54,6 +55,9 @@ exports.login = asyncHandler(async (req, res) => {
         firstNameEnglish: result.firstNameEnglish,
         lastNameEnglish: result.lastNameEnglish,
         image: result.image,
+        jobRole: result.jobRole,
+        QRcode: result.QRcode,
+        qrCode: result.QRcode,
       },
     });
   } catch (err) {
