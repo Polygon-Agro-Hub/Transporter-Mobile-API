@@ -2,17 +2,17 @@ const { collectionofficer: db } = require("../startup/database");
 
 /**
  * Get count of active/pending loads for a heavy vehicle driver.
- * A load is considered "To Do" if unloadTime and unloadOfficerId are NULL.
+ * A load is considered "To Do" if conformDriverId matches and unloadTime/unloadOfficerId are NULL.
  */
 exports.getDriverLoadsCount = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
       SELECT 
         COUNT(id) as totalLoads,
-        SUM(CASE WHEN unloadTime IS NULL AND unloadOfficerId IS NULL THEN 1 ELSE 0 END) as todoLoads,
-        SUM(CASE WHEN unloadTime IS NOT NULL THEN 1 ELSE 0 END) as completedLoads
+        SUM(CASE WHEN unloadTime IS NULL OR unloadOfficerId IS NULL THEN 1 ELSE 0 END) as todoLoads,
+        SUM(CASE WHEN unloadTime IS NOT NULL AND unloadOfficerId IS NOT NULL THEN 1 ELSE 0 END) as completedLoads
       FROM collection_officer.transportload
-      WHERE driverId = ?
+      WHERE conformDriverId = ?
     `;
 
     db.query(sql, [driverId], (err, results) => {
@@ -39,6 +39,7 @@ exports.getDriverLoadsCount = async (driverId) => {
 
 /**
  * Get driver loads list filtered by status ('todo', 'delivered', or 'all').
+ * Filtered by conformDriverId.
  */
 exports.getDriverLoads = async (driverId, status = "all") => {
   return new Promise((resolve, reject) => {
@@ -47,10 +48,12 @@ exports.getDriverLoads = async (driverId, status = "all") => {
         tl.id,
         tl.transferCode,
         tl.driverId,
+        tl.conformDriverId,
         tl.comCenId,
         tl.disComCenId,
         tl.unloadOfficerId,
         tl.unloadTime,
+        tl.journeyStatus,
         tl.recomandation,
         tl.createdAt,
         COALESCE(dc.centerName, 'Colombo Distribution Centre') as destinationCenterName,
@@ -66,15 +69,15 @@ exports.getDriverLoads = async (driverId, status = "all") => {
       LEFT JOIN collection_officer.collectioncenter colc ON cc.centerId = colc.id
       LEFT JOIN collection_officer.loadeditems li ON li.transportId = tl.id
       LEFT JOIN collection_officer.loadedcrates lc ON lc.loadId = li.id
-      WHERE tl.driverId = ?
+      WHERE tl.conformDriverId = ?
     `;
 
     const params = [driverId];
 
     if (status === "todo") {
-      sql += " AND tl.unloadTime IS NULL AND tl.unloadOfficerId IS NULL";
+      sql += " AND (tl.unloadTime IS NULL OR tl.unloadOfficerId IS NULL)";
     } else if (status === "delivered") {
-      sql += " AND tl.unloadTime IS NOT NULL";
+      sql += " AND tl.unloadTime IS NOT NULL AND tl.unloadOfficerId IS NOT NULL";
     }
 
     sql += " GROUP BY tl.id ORDER BY tl.createdAt DESC";
@@ -86,7 +89,7 @@ exports.getDriverLoads = async (driverId, status = "all") => {
       }
 
       const formattedLoads = results.map((row, index) => {
-        const isDelivered = row.unloadTime !== null;
+        const isDelivered = row.unloadTime !== null && row.unloadOfficerId !== null;
         return {
           id: `#${String(index + 1).padStart(2, "0")}`,
           loadId: row.id,
@@ -97,10 +100,12 @@ exports.getDriverLoads = async (driverId, status = "all") => {
           destinationCity: row.destinationCity,
           sourceCenter: row.sourceCenterName,
           status: isDelivered ? "delivered" : "todo",
+          journeyStatus: row.journeyStatus || "Pending",
           totalWeightKg: parseFloat(Number(row.totalWeightKg).toFixed(2)),
           totalCrates: Number(row.totalCrates || 0),
           totalItemsCount: Number(row.totalItemsCount || 0),
           unloadTime: row.unloadTime,
+          unloadOfficerId: row.unloadOfficerId,
           createdAt: row.createdAt,
           recomandation: row.recomandation,
         };
@@ -121,6 +126,87 @@ exports.getDriverLoads = async (driverId, status = "all") => {
 };
 
 /**
+ * Scan QR and assign load to driver (updates conformDriverId).
+ * Validates driverId and conformDriverId with custom error messages.
+ */
+exports.scanAndAssignLoad = async (transferCode, currentDriverId) => {
+  return new Promise((resolve, reject) => {
+    const isNumeric = !isNaN(transferCode) && !isNaN(parseInt(transferCode, 10));
+    const paramId = isNumeric ? parseInt(transferCode, 10) : -1;
+
+    const selectSql = `
+      SELECT id, transferCode, driverId, conformDriverId, unloadOfficerId, unloadTime
+      FROM collection_officer.transportload
+      WHERE transferCode = ? OR id = ?
+      LIMIT 1
+    `;
+
+    db.query(selectSql, [String(transferCode), paramId], (err, results) => {
+      if (err) {
+        console.error("Database error validating load QR:", err.message);
+        return reject(new Error("Failed to validate load QR"));
+      }
+
+      if (results.length === 0) {
+        const notFoundErr = new Error("Invalid Load QR Code. Load not found.");
+        notFoundErr.statusCode = 404;
+        return reject(notFoundErr);
+      }
+
+      const load = results[0];
+
+      // Rule 4: If already assigned to same user via conformDriverId
+      if (load.conformDriverId && Number(load.conformDriverId) === Number(currentDriverId)) {
+        const sameDriverErr = new Error("This load is already assigned to you.");
+        sameDriverErr.statusCode = 400;
+        return reject(sameDriverErr);
+      }
+
+      // Rule 3: If already assigned to another driver via conformDriverId
+      if (load.conformDriverId && Number(load.conformDriverId) !== Number(currentDriverId)) {
+        const diffDriverErr = new Error("You cannot take this load.\nIt is already assigned to another driver.");
+        diffDriverErr.statusCode = 400;
+        return reject(diffDriverErr);
+      }
+
+      // Rule 3: When Scan QR need driverId == conformDriverId / currentDriverId if assigned
+      if (load.driverId && Number(load.driverId) !== Number(currentDriverId)) {
+        const diffDriverErr = new Error("You cannot take this load.\nIt is already assigned to another driver.");
+        diffDriverErr.statusCode = 400;
+        return reject(diffDriverErr);
+      }
+
+      // If load is already delivered
+      if (load.unloadTime !== null) {
+        const deliveredErr = new Error("This load has already been delivered.");
+        deliveredErr.statusCode = 400;
+        return reject(deliveredErr);
+      }
+
+      // Rule 1: Update conformDriverId to mark as ToDo Job List
+      const updateSql = `
+        UPDATE collection_officer.transportload
+        SET conformDriverId = ?
+        WHERE id = ?
+      `;
+
+      db.query(updateSql, [currentDriverId, load.id], (updateErr, updateResult) => {
+        if (updateErr) {
+          console.error("Database error updating conformDriverId:", updateErr.message);
+          return reject(new Error("Failed to assign load"));
+        }
+
+        resolve({
+          ...load,
+          conformDriverId: currentDriverId,
+          message: "Load successfully scanned and assigned to your To Do list",
+        });
+      });
+    });
+  });
+};
+
+/**
  * Get detailed load summary by transferCode or loadId including grouped crops and crates.
  */
 exports.getLoadDetails = async (transferCodeOrId, driverId = null) => {
@@ -130,10 +216,12 @@ exports.getLoadDetails = async (transferCodeOrId, driverId = null) => {
         tl.id,
         tl.transferCode,
         tl.driverId,
+        tl.conformDriverId,
         tl.comCenId,
         tl.disComCenId,
         tl.unloadOfficerId,
         tl.unloadTime,
+        tl.journeyStatus,
         tl.recomandation,
         tl.createdAt,
         COALESCE(dc.centerName, 'Colombo Distribution Centre') as destinationCenterName,
@@ -154,8 +242,8 @@ exports.getLoadDetails = async (transferCodeOrId, driverId = null) => {
     const params = [String(transferCodeOrId), paramId];
 
     if (driverId) {
-      loadSql += " AND tl.driverId = ?";
-      params.push(driverId);
+      loadSql += " AND (tl.conformDriverId = ? OR tl.driverId = ?)";
+      params.push(driverId, driverId);
     }
     loadSql += " LIMIT 1";
 
@@ -242,6 +330,7 @@ exports.getLoadDetails = async (transferCodeOrId, driverId = null) => {
             id: loadHeader.id,
             transferCode: loadHeader.transferCode,
             driverId: loadHeader.driverId,
+            conformDriverId: loadHeader.conformDriverId,
             destination: loadHeader.destinationCenterName
               ? `${loadHeader.destinationCenterName}${loadHeader.destinationCity ? " - " + loadHeader.destinationCity : ""}`
               : "Colombo Distribution Centre",
@@ -250,6 +339,7 @@ exports.getLoadDetails = async (transferCodeOrId, driverId = null) => {
             destinationLongitude: loadHeader.destinationLongitude,
             sourceCenter: loadHeader.sourceCenterName,
             status: loadHeader.unloadTime ? "delivered" : "todo",
+            journeyStatus: loadHeader.journeyStatus || "Pending",
             unloadTime: loadHeader.unloadTime,
             createdAt: loadHeader.createdAt,
             recomandation: loadHeader.recomandation,
@@ -272,7 +362,7 @@ exports.checkLoadStatus = async (transferCodeOrId) => {
     const paramId = isNumeric ? parseInt(transferCodeOrId, 10) : -1;
 
     const sql = `
-      SELECT id, transferCode, driverId, unloadOfficerId, unloadTime
+      SELECT id, transferCode, driverId, conformDriverId, unloadOfficerId, unloadTime
       FROM collection_officer.transportload
       WHERE transferCode = ? OR id = ?
       LIMIT 1
@@ -295,6 +385,7 @@ exports.checkLoadStatus = async (transferCodeOrId) => {
         id: row.id,
         transferCode: row.transferCode,
         driverId: row.driverId,
+        conformDriverId: row.conformDriverId,
         unloadOfficerId: row.unloadOfficerId,
         unloadTime: row.unloadTime,
         isDelivered: !!isDelivered,
@@ -326,7 +417,7 @@ exports.unloadLoad = async (transferCodeOrId, unloadOfficerId = 189) => {
 
       // Fetch the updated record
       const selectSql = `
-        SELECT id, transferCode, driverId, unloadOfficerId, unloadTime
+        SELECT id, transferCode, driverId, conformDriverId, unloadOfficerId, unloadTime
         FROM collection_officer.transportload
         WHERE transferCode = ? OR id = ?
         LIMIT 1
@@ -341,6 +432,7 @@ exports.unloadLoad = async (transferCodeOrId, unloadOfficerId = 189) => {
               id: row.id,
               transferCode: row.transferCode,
               driverId: row.driverId,
+              conformDriverId: row.conformDriverId,
               unloadOfficerId: row.unloadOfficerId,
               unloadTime: row.unloadTime,
             });
@@ -350,6 +442,106 @@ exports.unloadLoad = async (transferCodeOrId, unloadOfficerId = 189) => {
           return resolve(row);
         }
         resolve(result);
+      });
+    });
+  });
+};
+
+/**
+ * Validate Load QR without assigning yet (used when scanning QR to check eligibility before summary).
+ */
+exports.validateLoadQR = async (transferCode, currentDriverId) => {
+  return new Promise((resolve, reject) => {
+    const isNumeric = !isNaN(transferCode) && !isNaN(parseInt(transferCode, 10));
+    const paramId = isNumeric ? parseInt(transferCode, 10) : -1;
+
+    const selectSql = `
+      SELECT id, transferCode, driverId, conformDriverId, unloadOfficerId, unloadTime
+      FROM collection_officer.transportload
+      WHERE transferCode = ? OR id = ?
+      LIMIT 1
+    `;
+
+    db.query(selectSql, [String(transferCode), paramId], (err, results) => {
+      if (err) {
+        console.error("Database error validating load QR:", err.message);
+        return reject(new Error("Failed to validate load QR"));
+      }
+
+      if (results.length === 0) {
+        const notFoundErr = new Error("Invalid Load QR Code. Load not found.");
+        notFoundErr.statusCode = 404;
+        return reject(notFoundErr);
+      }
+
+      const load = results[0];
+
+      // Rule 4: If already assigned to same user via conformDriverId
+      if (load.conformDriverId && Number(load.conformDriverId) === Number(currentDriverId)) {
+        const sameDriverErr = new Error("This load is already assigned to you.");
+        sameDriverErr.statusCode = 400;
+        return reject(sameDriverErr);
+      }
+
+      // Rule 3: If already assigned to another driver via conformDriverId
+      if (load.conformDriverId && Number(load.conformDriverId) !== Number(currentDriverId)) {
+        const diffDriverErr = new Error("You cannot take this load.\nIt is already assigned to another driver.");
+        diffDriverErr.statusCode = 400;
+        return reject(diffDriverErr);
+      }
+
+      // Rule 3: When Scan QR need driverId == conformDriverId / currentDriverId if assigned
+      if (load.driverId && Number(load.driverId) !== Number(currentDriverId)) {
+        const diffDriverErr = new Error("You cannot take this load.\nIt is already assigned to another driver.");
+        diffDriverErr.statusCode = 400;
+        return reject(diffDriverErr);
+      }
+
+      // If load is already delivered
+      if (load.unloadTime !== null) {
+        const deliveredErr = new Error("This load has already been delivered.");
+        deliveredErr.statusCode = 400;
+        return reject(deliveredErr);
+      }
+
+      resolve({
+        id: load.id,
+        transferCode: load.transferCode,
+        driverId: load.driverId,
+        conformDriverId: load.conformDriverId,
+        isValid: true,
+      });
+    });
+  });
+};
+
+/**
+ * Update journeyStatus ('Pending', 'Start', 'End')
+ */
+exports.updateJourneyStatus = async (transferCodeOrId, journeyStatus) => {
+  return new Promise((resolve, reject) => {
+    const isNumeric = !isNaN(transferCodeOrId) && !isNaN(parseInt(transferCodeOrId, 10));
+    const paramId = isNumeric ? parseInt(transferCodeOrId, 10) : -1;
+
+    const validStatuses = ["Pending", "Start", "End"];
+    const statusToSet = validStatuses.includes(journeyStatus) ? journeyStatus : "Pending";
+
+    const sql = `
+      UPDATE collection_officer.transportload
+      SET journeyStatus = ?
+      WHERE transferCode = ? OR id = ?
+    `;
+
+    db.query(sql, [statusToSet, String(transferCodeOrId), paramId], (err, result) => {
+      if (err) {
+        console.error("Database error updating journeyStatus:", err.message);
+        return reject(new Error("Failed to update journey status"));
+      }
+
+      resolve({
+        transferCode: transferCodeOrId,
+        journeyStatus: statusToSet,
+        affectedRows: result.affectedRows,
       });
     });
   });
