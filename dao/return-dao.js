@@ -89,8 +89,8 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
             o.isCoupon,
             o.couponType,
             o.userId
-          FROM market_place.processorders po
-          JOIN market_place.orders o ON po.orderId = o.id
+          FROM collection_officer.processorders po
+          JOIN collection_officer.orders o ON po.orderId = o.id
           WHERE po.id IN (?)
         `;
 
@@ -151,7 +151,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               if (houseOrderIds.length > 0) {
                 const houseRows = await queryAsync(
                   connection,
-                  `SELECT orderId, city FROM market_place.orderhouse WHERE orderId IN (?)`,
+                  `SELECT orderId, city FROM collection_officer.orderhouse WHERE orderId IN (?)`,
                   [houseOrderIds],
                 );
                 houseRows.forEach((row) => {
@@ -162,7 +162,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               if (apartmentOrderIds.length > 0) {
                 const apartmentRows = await queryAsync(
                   connection,
-                  `SELECT orderId, city FROM market_place.orderapartment WHERE orderId IN (?)`,
+                  `SELECT orderId, city FROM collection_officer.orderapartment WHERE orderId IN (?)`,
                   [apartmentOrderIds],
                 );
                 apartmentRows.forEach((row) => {
@@ -302,13 +302,13 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
               const updateProcessOrdersQuery =
                 cashProcessOrderIds.length > 0
                   ? `
-                    UPDATE market_place.processorders
+                    UPDATE collection_officer.processorders
                     SET status = 'Return',
                         isPaid = CASE WHEN id IN (?) THEN 0 ELSE isPaid END
                     WHERE id IN (?)
                   `
                   : `
-                    UPDATE market_place.processorders
+                    UPDATE collection_officer.processorders
                     SET status = 'Return'
                     WHERE id IN (?)
                   `;
@@ -525,7 +525,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                               const numericUserId = Number(uid);
                                               const result = await queryAsync(
                                                 connection,
-                                                `UPDATE market_place.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
+                                                `UPDATE collection_officer.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
                                                 [delta, numericUserId],
                                               );
 
@@ -590,7 +590,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                               async (b) => {
                                                 const result = await queryAsync(
                                                   connection,
-                                                  `UPDATE market_place.processorders SET curDlvrCharge = ? WHERE id = ?`,
+                                                  `UPDATE collection_officer.processorders SET curDlvrCharge = ? WHERE id = ?`,
                                                   [
                                                     b.resolvedTodaysDeliveryCharge,
                                                     b.processOrderId,
@@ -626,7 +626,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                       }
 
                                       // ── NEW: persist handling fee per returned processOrder ──
-                                      // orderhandlingfee.orderId references market_place.processorders.id
+                                      // orderhandlingfee.orderId references collection_officer.processorders.id
                                       let handlingFeeInsertResults = [];
                                       try {
                                         const handlingFeeRows =
@@ -700,6 +700,33 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
 
                                         connection.release();
 
+                                        // Insert customer-facing ordernotfication for "Order Returned"
+                                        db.collectionofficer.query(
+                                          `SELECT rsnEnglish FROM collection_officer.returnreason WHERE id = ? LIMIT 1`,
+                                          [returnReasonId],
+                                          (errRsn, rsnRows) => {
+                                            const reasonText = (rsnRows && rsnRows.length > 0)
+                                              ? rsnRows[0].rsnEnglish
+                                              : (note || 'Returned');
+                                            const returnedNotifValues = invoiceResult.map((row) => [
+                                              row.id,
+                                              'Order Returned',
+                                              `Your order #${row.invNo}, has been returned. Reason : "${reasonText}"`,
+                                              0,
+                                              new Date(),
+                                            ]);
+                                            db.collectionofficer.query(
+                                              `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
+                                              [returnedNotifValues],
+                                              (errON) => {
+                                                if (errON) {
+                                                  console.error('[submitReturn] Failed to insert ordernotfication:', errON.message);
+                                                }
+                                              },
+                                            );
+                                          },
+                                        );
+
                                         resolve({
                                           processOrdersUpdated:
                                             processOrdersResult.affectedRows,
@@ -749,13 +776,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
   });
 };
 // Get Driver's Return Orders
-
-function isFreeDeliveryCoupon(row) {
-  return (
-    !!row.isCoupon &&
-    (row.couponType || "").toString().trim().toLowerCase() === "free delivery"
-  );
-}
 
 exports.getDriverReturnOrdersDAO = async (driverId) => {
   return new Promise((resolve, reject) => {
@@ -827,13 +847,13 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       
       -- Join with processorders
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       
       -- Join with orders
-      INNER JOIN market_place.orders o ON po.orderId = o.id
+      INNER JOIN collection_officer.orders o ON po.orderId = o.id
       
       -- Join with marketplaceusers
-      INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
+      INNER JOIN collection_officer.marketplaceusers u ON o.userId = u.id
       
       -- LEFT JOIN with the LATEST driverreturnorders using a subquery
       LEFT JOIN (
@@ -851,8 +871,8 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         AND dro_latest.returnReasonId = dro.returnReasonId
       
       -- LEFT JOIN with address tables
-      LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
-      LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
+      LEFT JOIN collection_officer.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
+      LEFT JOIN collection_officer.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
       
       WHERE dom.driverId = ?
         AND do.drvStatus = 'Return'
@@ -1010,7 +1030,7 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
         dom.driverId,
         do.drvStatus,
         dom.isHandOver
-      FROM market_place.processorders po
+      FROM collection_officer.processorders po
       INNER JOIN collection_officer.driverorders do ON po.id = do.orderId
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE po.invNo IN (?)
@@ -1064,7 +1084,7 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
 
             // Step 3: Update processorders table - set status to 'Return Received'
             const updateProcessOrdersSql = `
-          UPDATE market_place.processorders 
+          UPDATE collection_officer.processorders 
           SET status = 'Return Received'
           WHERE id IN (?)
         `;
@@ -1087,7 +1107,7 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
               do.id as driverOrderId,
               do.drvStatus,
               dom.isHandOver
-            FROM market_place.processorders po
+            FROM collection_officer.processorders po
             INNER JOIN collection_officer.driverorders do ON po.id = do.orderId
             INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
             WHERE po.id IN (?)
@@ -1121,5 +1141,375 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
         );
       },
     );
+  });
+};
+
+/**
+ * Scan DCM QR and create 5-digit OTP with 2-minute expiration
+ */
+exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, driverId }) => {
+  return new Promise((resolve, reject) => {
+    // Helper to find officer:
+    // 1. If explicit DCM empId passed
+    // 2. Else find driver's irmId officer
+    // 3. Else find approved DCM in driver's distribution center
+    const findOfficer = (cb) => {
+      const upperEmpId = String(dcmEmpId || "").trim().toUpperCase();
+      if (upperEmpId.startsWith("DCM")) {
+        const officerSql = `
+          SELECT id, empId, firstNameEnglish, lastNameEnglish, status, distributedCenterId
+          FROM collection_officer.collectionofficer
+          WHERE (empId = ? OR empId = ?)
+          LIMIT 1
+        `;
+        db.collectionofficer.query(officerSql, [dcmEmpId, upperEmpId], (err, res) => {
+          if (!err && res.length > 0 && res[0].status === "Approved") {
+            return cb(null, res[0]);
+          }
+          fallbackOfficer();
+        });
+      } else {
+        fallbackOfficer();
+      }
+
+      function fallbackOfficer() {
+        // Try driver's irmId
+        const driverSql = `
+          SELECT d.irmId, d.distributedCenterId,
+                 irm.id as irmIdVal, irm.empId as irmEmpId, irm.firstNameEnglish as irmFirstName,
+                 irm.status as irmStatus
+          FROM collection_officer.collectionofficer d
+          LEFT JOIN collection_officer.collectionofficer irm ON d.irmId = irm.id
+          WHERE d.id = ?
+          LIMIT 1
+        `;
+        db.collectionofficer.query(driverSql, [driverId], (dErr, dRes) => {
+          if (!dErr && dRes.length > 0) {
+            const drv = dRes[0];
+            if (drv.irmIdVal && drv.irmEmpId && (drv.irmStatus === "Approved" || drv.irmStatus === "Active")) {
+              return cb(null, {
+                id: drv.irmIdVal,
+                empId: drv.irmEmpId,
+                firstNameEnglish: drv.irmFirstName || drv.irmEmpId,
+                status: drv.irmStatus,
+              });
+            }
+
+            // Fallback: find approved DCM in driver's center
+            const dcId = drv.distributedCenterId || 66;
+            const centerDcmSql = `
+              SELECT id, empId, firstNameEnglish, lastNameEnglish, status
+              FROM collection_officer.collectionofficer
+              WHERE (distributedCenterId = ? OR UPPER(empId) LIKE 'DCM%')
+                AND status = 'Approved'
+                AND UPPER(empId) LIKE 'DCM%'
+              LIMIT 1
+            `;
+            db.collectionofficer.query(centerDcmSql, [dcId], (cErr, cRes) => {
+              if (!cErr && cRes.length > 0) {
+                return cb(null, cRes[0]);
+              }
+              // Ultimate fallback: any approved DCM
+              db.collectionofficer.query(
+                `SELECT id, empId, firstNameEnglish, status FROM collection_officer.collectionofficer WHERE UPPER(empId) LIKE 'DCM%' AND status = 'Approved' LIMIT 1`,
+                (aErr, aRes) => {
+                  if (!aErr && aRes.length > 0) {
+                    return cb(null, aRes[0]);
+                  }
+                  cb(new Error("No approved Distribution Centre Manager found"));
+                }
+              );
+            });
+          } else {
+            cb(new Error("Driver record not found"));
+          }
+        });
+      }
+    };
+
+    findOfficer((officerErr, officer) => {
+      if (officerErr || !officer) {
+        const err = officerErr || new Error("Distribution Centre Manager not found in the system");
+        err.statusCode = 404;
+        return reject(err);
+      }
+
+      let orderSql = `
+        SELECT 
+          do.id as driverOrderId,
+          do.drvStatus,
+          po.id as processOrderId,
+          po.invNo
+        FROM collection_officer.driverorders do
+        INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+        INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+        WHERE dom.driverId = ?
+          AND do.drvStatus = 'Return'
+      `;
+      const orderParams = [driverId];
+
+      if (invoiceNumber) {
+        orderSql += " AND (po.invNo = ? OR po.id = ?)";
+        orderParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
+      } else if (orderId) {
+        orderSql += " AND (po.id = ? OR do.id = ?)";
+        orderParams.push(orderId, orderId);
+      }
+      orderSql += " LIMIT 1";
+
+      db.collectionofficer.query(orderSql, orderParams, (orderErr, orderResults) => {
+        if (orderErr) {
+          console.error("Database error fetching return order:", orderErr.message);
+          return reject(new Error("Failed to find return order"));
+        }
+
+        if (orderResults.length === 0) {
+          const err = new Error("Return order not found or not in 'Return' status");
+          err.statusCode = 404;
+          return reject(err);
+        }
+
+        const driverOrder = orderResults[0];
+        const otpCode = Math.floor(10000 + Math.random() * 90000); // 5-digit OTP
+
+        const insertSql = `
+          INSERT INTO collection_officer.handoverreturnorder (drvOrderId, handOverOfficerId, otpCode, expireTime, createdAt)
+          VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 2 MINUTE), NOW())
+        `;
+
+        db.collectionofficer.query(insertSql, [driverOrder.driverOrderId, officer.id, otpCode], (insertErr, insertResult) => {
+          if (insertErr) {
+            console.error("Database error inserting handover return OTP:", insertErr.message);
+            return reject(new Error("Failed to generate OTP"));
+          }
+
+          console.log(`🔑 [Return Order OTP] Order: ${driverOrder.invNo}, drvOrderId: ${driverOrder.driverOrderId}, Officer: ${officer.empId}, OTP: ${otpCode}`);
+
+          resolve({
+            drvOrderId: driverOrder.driverOrderId,
+            processOrderId: driverOrder.processOrderId,
+            invoiceNumber: driverOrder.invNo,
+            dcmEmpId: officer.empId,
+            officerId: officer.id,
+            officerName: officer.firstNameEnglish || officer.empId,
+            otpId: insertResult.insertId,
+            otpCode: otpCode,
+            expiresInSeconds: 120,
+          });
+        });
+      });
+    });
+  });
+};
+
+/**
+ * Resend OTP for Return Order
+ */
+exports.resendReturnOtp = async ({ drvOrderId, dcmEmpId, driverId, orderId, invoiceNumber }) => {
+  return new Promise((resolve, reject) => {
+    let findOrderSql = `
+      SELECT 
+        do.id as driverOrderId,
+        do.drvStatus,
+        po.invNo
+      FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+      WHERE dom.driverId = ?
+    `;
+    const params = [driverId];
+    if (drvOrderId) {
+      findOrderSql += " AND do.id = ?";
+      params.push(drvOrderId);
+    } else if (invoiceNumber) {
+      findOrderSql += " AND po.invNo = ?";
+      params.push(invoiceNumber);
+    } else if (orderId) {
+      findOrderSql += " AND (po.id = ? OR do.id = ?)";
+      params.push(orderId, orderId);
+    }
+    findOrderSql += " LIMIT 1";
+
+    db.collectionofficer.query(findOrderSql, params, (findErr, findResults) => {
+      if (findErr || findResults.length === 0) {
+        const err = new Error("Return order not found");
+        err.statusCode = 404;
+        return reject(err);
+      }
+
+      const driverOrder = findResults[0];
+
+      const officerSql = `
+        SELECT co.id, co.empId, co.firstNameEnglish, co.status
+        FROM collection_officer.collectionofficer co
+        WHERE co.empId = ? OR co.empId = ?
+        LIMIT 1
+      `;
+      const upperEmpId = String(dcmEmpId || "").trim().toUpperCase();
+
+      db.collectionofficer.query(officerSql, [dcmEmpId, upperEmpId], (offErr, offResults) => {
+        let officerId = null;
+        let officerEmpId = upperEmpId;
+
+        if (!offErr && offResults.length > 0) {
+          officerId = offResults[0].id;
+          officerEmpId = offResults[0].empId;
+        }
+
+        const otpCode = Math.floor(10000 + Math.random() * 90000);
+
+        const insertSql = `
+          INSERT INTO collection_officer.handoverreturnorder (drvOrderId, handOverOfficerId, otpCode, expireTime, createdAt)
+          VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 2 MINUTE), NOW())
+        `;
+
+        db.collectionofficer.query(insertSql, [driverOrder.driverOrderId, officerId, otpCode], (insErr, insRes) => {
+          if (insErr) {
+            console.error("Database error resending OTP:", insErr.message);
+            return reject(new Error("Failed to resend OTP"));
+          }
+
+          console.log(`🔄 [Resend Return OTP] Order: ${driverOrder.invNo}, drvOrderId: ${driverOrder.driverOrderId}, Officer: ${officerEmpId}, OTP: ${otpCode}`);
+
+          resolve({
+            drvOrderId: driverOrder.driverOrderId,
+            invoiceNumber: driverOrder.invNo,
+            dcmEmpId: officerEmpId,
+            otpId: insRes.insertId,
+            otpCode: otpCode,
+            expiresInSeconds: 120,
+          });
+        });
+      });
+    });
+  });
+};
+
+/**
+ * Verify OTP and update order to 'Return Received'
+ */
+exports.verifyOtpReturnReceived = async ({ drvOrderId, orderId, invoiceNumber, otpCode, driverId }) => {
+  return new Promise((resolve, reject) => {
+    let findOrderSql = `
+      SELECT 
+        do.id as driverOrderId,
+        do.drvStatus,
+        po.id as processOrderId,
+        po.invNo
+      FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+      WHERE dom.driverId = ?
+    `;
+    const params = [driverId];
+    if (drvOrderId) {
+      findOrderSql += " AND do.id = ?";
+      params.push(drvOrderId);
+    } else if (invoiceNumber) {
+      findOrderSql += " AND (po.invNo = ? OR po.id = ?)";
+      params.push(invoiceNumber, isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
+    } else if (orderId) {
+      findOrderSql += " AND (po.id = ? OR do.id = ?)";
+      params.push(orderId, orderId);
+    }
+    findOrderSql += " LIMIT 1";
+
+    db.collectionofficer.query(findOrderSql, params, (findErr, findResults) => {
+      if (findErr) {
+        console.error("Database error looking up driver order:", findErr.message);
+        return reject(new Error("Failed to lookup order"));
+      }
+
+      if (findResults.length === 0) {
+        const err = new Error("Return order not found for this driver");
+        err.statusCode = 404;
+        return reject(err);
+      }
+
+      const driverOrder = findResults[0];
+
+      if (driverOrder.drvStatus === "Return Received") {
+        const err = new Error("This order has already been marked as Return Received");
+        err.statusCode = 400;
+        return reject(err);
+      }
+
+      const otpSql = `
+        SELECT 
+          id,
+          drvOrderId,
+          handOverOfficerId,
+          otpCode,
+          expireTime,
+          createdAt,
+          CASE WHEN NOW() > expireTime THEN 1 ELSE 0 END as isExpired
+        FROM collection_officer.handoverreturnorder
+        WHERE drvOrderId = ?
+        ORDER BY id DESC
+        LIMIT 1
+      `;
+
+      db.collectionofficer.query(otpSql, [driverOrder.driverOrderId], (otpErr, otpResults) => {
+        if (otpErr) {
+          console.error("Database error looking up OTP:", otpErr.message);
+          return reject(new Error("Failed to verify OTP"));
+        }
+
+        if (otpResults.length === 0) {
+          const err = new Error("No OTP found. Please scan the DCM QR code again.");
+          err.statusCode = 400;
+          return reject(err);
+        }
+
+        const latestOtp = otpResults[0];
+
+        if (latestOtp.isExpired === 1) {
+          const err = new Error("The OTP has expired. Please request a new one.");
+          err.statusCode = 400;
+          err.errorType = "EXPIRED";
+          return reject(err);
+        }
+
+        if (Number(otpCode) !== Number(latestOtp.otpCode)) {
+          const err = new Error("The OTP is incorrect. Please check and try again.");
+          err.statusCode = 400;
+          err.errorType = "INCORRECT";
+          return reject(err);
+        }
+
+        const updateDriverSql = `
+          UPDATE collection_officer.driverorders
+          SET drvStatus = 'Return Received', receivedTime = NOW()
+          WHERE id = ?
+        `;
+
+        db.collectionofficer.query(updateDriverSql, [driverOrder.driverOrderId], (updateDriverErr) => {
+          if (updateDriverErr) {
+            console.error("Database error updating driver order to Return Received:", updateDriverErr.message);
+            return reject(new Error("Failed to update return order"));
+          }
+
+          const updateProcessSql = `
+            UPDATE collection_officer.processorders
+            SET status = 'Return Received'
+            WHERE id = ?
+          `;
+
+          db.collectionofficer.query(updateProcessSql, [driverOrder.processOrderId], (updateProcessErr) => {
+            if (updateProcessErr) {
+              console.error("Database error updating process order:", updateProcessErr.message);
+            }
+
+            resolve({
+              success: true,
+              drvOrderId: driverOrder.driverOrderId,
+              processOrderId: driverOrder.processOrderId,
+              invoiceNumber: driverOrder.invNo,
+              message: `Order : ${driverOrder.invNo} has been successfully returned to the centre.`,
+            });
+          });
+        });
+      });
+    });
   });
 };

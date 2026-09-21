@@ -1,5 +1,8 @@
 const orderDao = require("../dao/order-dao");
+const homeDao = require("../dao/home-dao");
 const asyncHandler = require("express-async-handler");
+const http = require("http");
+const https = require("https");
 const uploadFileToS3 = require("../middlewares/s3upload");
 const {
   assignDriverOrderSchema,
@@ -524,3 +527,296 @@ exports.ReStartJourney = asyncHandler(async (req, res) => {
     return res.status(500).json(response);
   }
 });
+
+// Get Optimized Route
+exports.GetOptimizedRoute = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const driverId = req.user.id;
+
+  try {
+    // 1. Get driver's distributed center ID
+    const driverCentre = await homeDao.getDriverDistributedCenter(driverId);
+
+    if (!driverCentre || !driverCentre.distributedCenterId) {
+      console.warn(`[GetOptimizedRoute] Driver ${driverId} has no distribution centre assigned.`);
+      return res.status(404).json({
+        status: "error",
+        message: "Driver distribution centre not found",
+      });
+    }
+
+    // 2. Get distribution centre details (lat, lng)
+    const centre = await orderDao.getDistributedCenterById(
+      driverCentre.distributedCenterId,
+    );
+
+    if (!centre || !centre.latitude || !centre.longitude) {
+      console.warn(`[GetOptimizedRoute] Distribution centre ${driverCentre.distributedCenterId} missing coordinates.`);
+      return res.status(404).json({
+        status: "error",
+        message: "Distribution centre coordinates not found",
+      });
+    }
+
+    // 3. Get all Todo/Hold/On the way orders with lat/lng
+    const statuses = ["Todo", "Hold", "On the way"];
+    const orders = await orderDao.getDriverOrdersDAO(
+      driverId,
+      statuses,
+      0, // isHandOver = 0
+      null,
+    );
+
+    // Filter orders that have valid coordinates
+    const deliveries = orders
+      .filter((order) => {
+        const hasCoords = order.latitude !== null && order.latitude !== undefined &&
+          order.longitude !== null && order.longitude !== undefined;
+        if (!hasCoords) {
+          console.warn(`[GetOptimizedRoute] Order ID ${order.driverOrderId} missing coordinates (lat: ${order.latitude}, lng: ${order.longitude})`);
+        }
+        return hasCoords;
+      })
+      .map((order) => ({
+        name: order.fullName || "Delivery",
+        lat: parseFloat(order.latitude),
+        lng: parseFloat(order.longitude),
+        demand: 0,
+        driverOrderId: order.driverOrderId,
+        allDriverOrderIds: order.allDriverOrderIds,
+        allProcessOrderIds: order.allProcessOrderIds,
+        drvStatus: order.drvStatus,
+      }));
+
+    if (deliveries.length === 0) {
+      console.warn("[GetOptimizedRoute] No valid deliveries with coordinates found.");
+      return res.status(200).json({
+        status: "success",
+        message: "No orders with coordinates found for optimization",
+        data: {
+          distributionCenter: {
+            id: centre.id,
+            name: centre.centerName,
+            latitude: centre.latitude,
+            longitude: centre.longitude,
+          },
+          optimizedRoute: null,
+          orders: orders,
+        },
+      });
+    }
+
+    // 4. Call the route optimization API
+    const routeApiUrl =
+      process.env.ROUTE_OPTIMIZATION_API_URL ||
+      "https://vrp-route-optimizer.vercel.app/api/nearest-route/one-way-optimal";
+
+    if (!routeApiUrl) {
+      console.warn("[GetOptimizedRoute] ROUTE_OPTIMIZATION_API_URL is not configured in .env");
+      // Fallback: return orders without optimization
+      return res.status(200).json({
+        status: "success",
+        message: "Route optimization API URL not configured, returning unoptimized orders",
+        data: {
+          distributionCenter: {
+            id: centre.id,
+            name: centre.centerName,
+            latitude: centre.latitude,
+            longitude: centre.longitude,
+          },
+          optimizedRoute: null,
+          orders: orders,
+        },
+      });
+    }
+
+    const routeRequestBody = {
+      distribution_center: {
+        name: centre.centerName || "Distribution Center",
+        lat: parseFloat(centre.latitude),
+        lng: parseFloat(centre.longitude),
+        demand: 0,
+      },
+      deliveries: deliveries.map((d) => ({
+        name: `ID_${d.driverOrderId}_${d.name}`,
+        lat: d.lat,
+        lng: d.lng,
+        demand: 0,
+      })),
+      distance_source: "osrm",
+      google_api_key: "",
+    };
+
+    const routeResponseData = await httpPost(routeApiUrl, routeRequestBody, 30000);
+
+    // 5. Map the optimized route back to orders
+    const optimizedStops = routeResponseData.stops || [];
+
+    // Match optimized stops to orders by driverOrderId in name, or by coordinates as fallback
+    const optimizedOrders = optimizedStops
+      .filter((stop) => stop.order > 0) // Skip the distribution centre (order 0)
+      .map((stop) => {
+        let matchingDelivery = null;
+
+        // Try extracting driverOrderId from stop.name (formatted as ID_<driverOrderId>_<name>)
+        const match = stop.name ? stop.name.match(/^ID_(\d+)_/) : null;
+        if (match) {
+          const targetDriverOrderId = parseInt(match[1], 10);
+          matchingDelivery = deliveries.find(
+            (d) => d.driverOrderId === targetDriverOrderId,
+          );
+        }
+
+        // Fallback to coordinate matching if ID matching did not return a match
+        if (!matchingDelivery) {
+          matchingDelivery = deliveries.find(
+            (d) =>
+              Math.abs(d.lat - stop.lat) < 0.0001 &&
+              Math.abs(d.lng - stop.lng) < 0.0001,
+          );
+        }
+
+        // Find the original order
+        const originalOrder = matchingDelivery
+          ? orders.find(
+            (o) => o.driverOrderId === matchingDelivery.driverOrderId,
+          )
+          : null;
+
+        return {
+          routeOrder: stop.order,
+          name: stop.name,
+          lat: stop.lat,
+          lng: stop.lng,
+          legDistanceMeters: stop.leg_distance_meters,
+          cumulativeDistanceMeters: stop.cumulative_distance_meters,
+          driverOrderId: matchingDelivery
+            ? matchingDelivery.driverOrderId
+            : null,
+          allDriverOrderIds: matchingDelivery
+            ? matchingDelivery.allDriverOrderIds
+            : [],
+          allProcessOrderIds: matchingDelivery
+            ? matchingDelivery.allProcessOrderIds
+            : [],
+          drvStatus: matchingDelivery ? matchingDelivery.drvStatus : null,
+          orderData: originalOrder || null,
+        };
+      });
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        distributionCenter: {
+          id: centre.id,
+          name: centre.centerName,
+          latitude: centre.latitude,
+          longitude: centre.longitude,
+        },
+        optimizedRoute: {
+          routingType: routeResponseData.routing_type,
+          algorithm: routeResponseData.algorithm,
+          totalDistanceMeters: routeResponseData.total_distance_meters,
+          stops: optimizedStops,
+        },
+        optimizedOrders: optimizedOrders,
+        totalOrders: orders.length,
+        optimizedCount: optimizedOrders.length,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting optimized route:", error.message);
+
+    // If the route optimization API fails, return orders without optimization
+    try {
+      const statuses = ["Todo", "Hold", "On the way"];
+      const orders = await orderDao.getDriverOrdersDAO(
+        driverId,
+        statuses,
+        0,
+        null,
+      );
+
+      return res.status(200).json({
+        status: "success",
+        message:
+          "Route optimization service unavailable, returning default order",
+        data: {
+          optimizedRoute: null,
+          orders: orders,
+          totalOrders: orders.length,
+        },
+      });
+    } catch (fallbackError) {
+      console.error("Fallback also failed:", fallbackError);
+    }
+
+    res.status(500).json({
+      status: "error",
+      message: "Failed to get optimized route",
+    });
+  }
+});
+
+// Helper function for HTTP/HTTPS POST JSON request without external dependencies
+function httpPost(urlStr, data, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    try {
+      const url = new URL(urlStr);
+      const postData = JSON.stringify(data);
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (url.protocol === "https:" ? 443 : 80),
+        path: url.pathname + url.search,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(postData),
+          Accept: "application/json",
+        },
+        timeout: timeoutMs,
+      };
+
+      const client = url.protocol === "https:" ? https : http;
+      const req = client.request(options, (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          try {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              const parsed = JSON.parse(body);
+              resolve(parsed);
+            } else {
+              reject(new Error(`HTTP request failed with status ${res.statusCode}: ${body}`));
+            }
+          } catch (e) {
+            reject(new Error(`Failed to parse JSON response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on("error", (err) => {
+        reject(err);
+      });
+
+      req.on("timeout", () => {
+        req.destroy();
+        reject(new Error("HTTP request timed out"));
+      });
+
+      req.write(postData);
+      req.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+

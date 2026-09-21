@@ -1,5 +1,6 @@
 const db = require("../startup/database");
 const bcrypt = require("bcrypt");
+const { ROLES } = require("../constants/user-roles");
 
 // Login User
 exports.loginUser = async (empId, password) => {
@@ -13,13 +14,19 @@ exports.loginUser = async (empId, password) => {
         firstNameEnglish,
         lastNameEnglish,
         image,
-        status  
+        status,
+        jobRole,
+        QRcode
       FROM collectionofficer
       WHERE empId = ? 
-        AND jobRole = "Driver"
+        AND (jobRole IN (?, ?) OR jobRole = "Driver")
     `;
 
-    const [results] = await db.collectionofficer.promise().query(sql, [empId]);
+    const [results] = await db.collectionofficer.promise().query(sql, [
+      empId,
+      ROLES.LIGHT_WEIGHT_DRIVER,
+      ROLES.HEAVY_WEIGHT_DRIVER,
+    ]);
 
     if (results.length === 0) {
       throw new Error("User not found");
@@ -45,6 +52,11 @@ exports.loginUser = async (empId, password) => {
       throw new Error("Invalid password");
     }
 
+    const normalizedJobRole =
+      user.jobRole === "Driver"
+        ? ROLES.LIGHT_WEIGHT_DRIVER
+        : user.jobRole || ROLES.LIGHT_WEIGHT_DRIVER;
+
     return {
       success: true,
       empId: user.empId,
@@ -53,6 +65,9 @@ exports.loginUser = async (empId, password) => {
       firstNameEnglish: user.firstNameEnglish,
       lastNameEnglish: user.lastNameEnglish,
       image: user.image,
+      jobRole: normalizedJobRole,
+      QRcode: user.QRcode || null,
+      qrCode: user.QRcode || null,
     };
   } catch (err) {
     throw new Error(err.message);
@@ -117,8 +132,10 @@ exports.getUserProfile = async (empId) => {
         co.nic,
         co.email,
         co.image,
+        co.jobRole,
         co.passwordUpdated,
         co.createdAt,
+        co.QRcode,
         vr.vType,
         vr.vRegNo
       FROM collectionofficer co
@@ -136,6 +153,11 @@ exports.getUserProfile = async (empId) => {
 
     const user = results[0];
 
+    const normalizedJobRole =
+      user.jobRole === "Driver"
+        ? ROLES.LIGHT_WEIGHT_DRIVER
+        : user.jobRole || ROLES.LIGHT_WEIGHT_DRIVER;
+
     return {
       empId: user.empId,
       firstNameEnglish: user.firstNameEnglish || "",
@@ -145,10 +167,13 @@ exports.getUserProfile = async (empId) => {
       nic: user.nic || "",
       email: user.email || "",
       image: user.image || "",
+      jobRole: normalizedJobRole,
       passwordUpdated: user.passwordUpdated ?? 0,
       createdAt: user.createdAt || "",
       vType: user.vType || null,
       vRegNo: user.vRegNo || null,
+      QRcode: user.QRcode || null,
+      qrCode: user.QRcode || null,
     };
   } catch (err) {
     // Re-throw the error with proper context
@@ -203,7 +228,7 @@ exports.getEarnings = async (driverId, date) => {
         po.paymentMethod,
         po.status
       FROM collection_officer.driverorders do
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE dom.driverId = ?
         AND DATE(do.createdAt) = ?
@@ -268,7 +293,7 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
         po.status,
         do.createdAt
       FROM collection_officer.driverorders do
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE dom.driverId = ?
         AND DATE(do.createdAt) BETWEEN ? AND ?
