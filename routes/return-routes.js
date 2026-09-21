@@ -314,4 +314,13 @@ router.get('/get-driver-return-orders', auth, returnEp.GetDriverReturnOrders);
  */
 router.post('/update-return-received', auth, returnEp.updateReturnReceived);
 
+// Scan DCM QR and generate OTP
+router.post('/scan-dcm-generate-otp', auth, returnEp.scanDcmGenerateOtp);
+
+// Resend Return OTP
+router.post('/resend-otp', auth, returnEp.resendReturnOtp);
+
+// Verify Return OTP and mark as Return Received
+router.post('/verify-otp-return-received', auth, returnEp.verifyOtpReturnReceived);
+
 module.exports = router;
