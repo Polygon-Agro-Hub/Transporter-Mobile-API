@@ -63,6 +63,7 @@ const holdroute = require("./routes/hold-routes");
 const homeroute = require("./routes/home-routes");
 const healthroute = require("./routes/health-routes");
 const loadroute = require("./routes/load-routes");
+const path = require('path');
 const setupSwagger = require("./startup/swagger");
 
 // Setup Swagger UI
@@ -77,6 +78,18 @@ app.use(`${BASE_PATH}/api/hold`, holdroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
 app.use(`${BASE_PATH}/api/load`, loadroute);
 app.use(`${BASE_PATH}`, healthroute);
+
+// ─── App Version Policy ────────────────────────────────────────────────────────
+// Returns the version policy JSON that controls in-app update prompts in the
+// mobile app. Edit remote-config/app-version.json to trigger or stop prompts
+// without redeploying code.
+app.get(`${BASE_PATH}/api/app-version`, (req, res) => {
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.set('Content-Type', 'application/json');
+  res.sendFile(path.join(__dirname, 'remote-config', 'app-version.json'));
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
