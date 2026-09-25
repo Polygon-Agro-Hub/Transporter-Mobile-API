@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middlewares/auth.middleware');
+const checkProfanity = require('../middlewares/profanity.middleware');
 const complainEp = require('../endpoint/complain-ep');
 
 /**
@@ -66,6 +67,25 @@ const complainEp = require('../endpoint/complain-ep');
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Unprocessable Entity / Profanity detected in complaint text.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "error"
+ *                 code:
+ *                   type: string
+ *                   example: "PROFANITY_DETECTED"
+ *                 message:
+ *                   type: string
+ *                   example: "Your message contains prohibited or inappropriate language."
+ *                 field:
+ *                   type: string
+ *                   example: "complain"
  *       500:
  *         description: Failed to submit complaint / Server error.
  *         content:
@@ -73,7 +93,7 @@ const complainEp = require('../endpoint/complain-ep');
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post('/add-complain', auth, complainEp.AddComplain);
+router.post('/add-complain', auth, checkProfanity(['complain']), complainEp.AddComplain);
 
 /**
  * @openapi

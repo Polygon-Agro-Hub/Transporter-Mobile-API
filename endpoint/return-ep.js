@@ -205,3 +205,121 @@ exports.updateReturnReceived = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Scan DCM QR and generate OTP
+exports.scanDcmGenerateOtp = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const { orderId, invoiceNumber, dcmEmpId, officerEmpId } = req.body;
+  const targetDcmId = dcmEmpId || officerEmpId || "";
+  const driverId = req.user.id;
+
+  try {
+    const result = await returnDao.scanDcmAndCreateReturnOtp({
+      orderId,
+      invoiceNumber,
+      dcmEmpId: targetDcmId,
+      driverId,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      message: "OTP generated successfully",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
+      status: "error",
+      currentStatus: error.currentStatus,
+      errorType: error.errorType,
+      message: error.message || "Failed to process QR and generate OTP",
+    });
+  }
+});
+
+// Resend Return OTP
+exports.resendReturnOtp = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const { drvOrderId, dcmEmpId, orderId, invoiceNumber } = req.body;
+  const driverId = req.user.id;
+
+  try {
+    const result = await returnDao.resendReturnOtp({
+      drvOrderId,
+      dcmEmpId,
+      driverId,
+      orderId,
+      invoiceNumber,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      message: "New OTP sent successfully",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
+      status: "error",
+      currentStatus: error.currentStatus,
+      errorType: error.errorType,
+      message: error.message || "Failed to resend OTP",
+    });
+  }
+});
+
+// Verify Return OTP and mark as Return Received
+exports.verifyOtpReturnReceived = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const { drvOrderId, orderId, invoiceNumber, otpCode } = req.body;
+  const driverId = req.user.id;
+
+  if (!otpCode) {
+    return res.status(400).json({
+      status: "error",
+      message: "Verification code is required",
+    });
+  }
+
+  try {
+    const result = await returnDao.verifyOtpReturnReceived({
+      drvOrderId,
+      orderId,
+      invoiceNumber,
+      otpCode,
+      driverId,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      message: "Order has been successfully returned to the centre.",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
+      status: "error",
+      currentStatus: error.currentStatus,
+      errorType: error.errorType || "ERROR",
+      message: error.message || "Failed to verify OTP",
+    });
+  }
+});

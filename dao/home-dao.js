@@ -43,8 +43,8 @@ exports.getAmount = async (driverId) => {
         ) as ongoingProcessOrderIds
       FROM collection_officer.driverorders do
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
-      INNER JOIN market_place.orders o ON po.orderId = o.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.orders o ON po.orderId = o.id
       WHERE 
         dom.driverId = ?
         AND dom.isHandOver = 0
@@ -128,9 +128,9 @@ exports.getAmount = async (driverId) => {
               po.orderId as ordersId
             FROM collection_officer.driverorders do
             INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-            INNER JOIN market_place.processorders po ON do.orderId = po.id
-            INNER JOIN market_place.orders o ON po.orderId = o.id
-            INNER JOIN market_place.orderhouse oh ON o.id = oh.orderId
+            INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+            INNER JOIN collection_officer.orders o ON po.orderId = o.id
+            INNER JOIN collection_officer.orderhouse oh ON o.id = oh.orderId
             WHERE 
               dom.driverId = ?
               AND dom.isHandOver = 0
@@ -144,16 +144,16 @@ exports.getAmount = async (driverId) => {
               po.orderId as ordersId
             FROM collection_officer.driverorders do
             INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-            INNER JOIN market_place.processorders po ON do.orderId = po.id
-            INNER JOIN market_place.orders o ON po.orderId = o.id
-            INNER JOIN market_place.orderapartment oa ON o.id = oa.orderId
+            INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+            INNER JOIN collection_officer.orders o ON po.orderId = o.id
+            INNER JOIN collection_officer.orderapartment oa ON o.id = oa.orderId
             WHERE 
               dom.driverId = ?
               AND dom.isHandOver = 0
               AND o.buildingType = 'Apartment'
           ) as locations
           INNER JOIN collection_officer.driverorders do ON locations.processOrderId = do.orderId
-          INNER JOIN market_place.processorders po ON do.orderId = po.id
+          INNER JOIN collection_officer.processorders po ON do.orderId = po.id
           ORDER BY locations.locationKey, locations.processOrderId
         `;
 
@@ -293,9 +293,9 @@ exports.getReceivedCash = async (driverId, paymentMethod = "Cash") => {
             INNER JOIN 
                 collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
             INNER JOIN 
-                market_place.processorders po ON do.orderId = po.id
+                collection_officer.processorders po ON do.orderId = po.id
             INNER JOIN 
-                market_place.orders o ON po.orderId = o.id
+                collection_officer.orders o ON po.orderId = o.id
             WHERE 
                 dom.driverId = ?
                 AND dom.isHandOver = 0
@@ -389,9 +389,9 @@ exports.getOrderAmounts = async (orderIds) => {
       INNER JOIN 
         collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       INNER JOIN 
-        market_place.processorders po ON do.orderId = po.id
+        collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN 
-        market_place.orders o ON po.orderId = o.id
+        collection_officer.orders o ON po.orderId = o.id
       WHERE 
         do.id IN (?)
         AND dom.isHandOver = 0

@@ -3,17 +3,19 @@ const db = require("../startup/database");
 // Get process order ID by invoice number
 exports.GetProcessOrderInfoByInvNo = async (invNo) => {
   return new Promise((resolve, reject) => {
+    const cleanedInvNo = (invNo || "").toString().trim();
+
     const sql = `
       SELECT 
         id,
         status,
         invNo
-      FROM market_place.processorders 
-      WHERE invNo = ? 
+      FROM collection_officer.processorders 
+      WHERE TRIM(UPPER(invNo)) = TRIM(UPPER(?))
       LIMIT 1
     `;
 
-    db.marketPlace.query(sql, [invNo], (err, results) => {
+    db.collectionofficer.query(sql, [cleanedInvNo], (err, results) => {
       if (err) {
         console.error("Database error fetching process order:", err.message);
         return reject(new Error("Failed to fetch process order"));
@@ -64,6 +66,24 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
               mainId = insertMainResult.insertId;
             }
 
+            // Check if order is already assigned
+            const existingOrder = await queryAsync(
+              connection,
+              "SELECT id FROM collection_officer.driverorders WHERE orderId = ? LIMIT 1 FOR UPDATE",
+              [processOrderId],
+            );
+
+            if (existingOrder.length > 0) {
+              return connection.rollback(() => {
+                connection.release();
+                reject(
+                  new Error(
+                    "This order has already been assigned to another driver.",
+                  ),
+                );
+              });
+            }
+
             const insertSql = `
               INSERT IGNORE INTO collection_officer.driverorders
               (drvOrderMainId, orderId, drvStatus, createdAt)
@@ -97,13 +117,13 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
 
               try {
                 const updateSql = `
-                  UPDATE market_place.processorders
+                  UPDATE collection_officer.processorders
                   SET status = 'Collected',
                       isTargetAssigned = 1
                   WHERE id = ?
                 `;
                 await new Promise((res, rej) => {
-                  db.marketPlace.query(
+                  db.collectionofficer.query(
                     updateSql,
                     [processOrderId],
                     (err, result) => {
@@ -114,12 +134,12 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
                 });
 
                 const notificationSql = `
-                  INSERT INTO market_place.dashnotification
+                  INSERT INTO collection_officer.dashnotification
                   (orderId, readStatus, title, createdAt)
                   VALUES (?, 0, 'Driver has collected the order', NOW())
                 `;
                 await new Promise((res, rej) => {
-                  db.marketPlace.query(
+                  db.collectionofficer.query(
                     notificationSql,
                     [processOrderId],
                     (err, result) => {
@@ -128,6 +148,34 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
                     },
                   );
                 });
+
+                // Insert customer-facing ordernotfication for "Order Collected by Driver"
+                try {
+                  const invNoRows = await new Promise((res, rej) => {
+                    db.collectionofficer.query(
+                      `SELECT invNo FROM collection_officer.processorders WHERE id = ? LIMIT 1`,
+                      [processOrderId],
+                      (err, rows) => {
+                        if (err) return rej(err);
+                        res(rows);
+                      },
+                    );
+                  });
+                  const invNo = invNoRows.length > 0 ? invNoRows[0].invNo : processOrderId;
+                  const collectedMsg = `Your order #${invNo}, has been collected by our driver.`;
+                  await new Promise((res, rej) => {
+                    db.collectionofficer.query(
+                      `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES (?, ?, ?, 0, NOW())`,
+                      [processOrderId, 'Order Collected by Driver', collectedMsg],
+                      (err, result) => {
+                        if (err) return rej(err);
+                        res(result);
+                      },
+                    );
+                  });
+                } catch (notifErr) {
+                  console.error('[SaveDriverOrder] Failed to insert ordernotfication:', notifErr.message);
+                }
 
                 resolve({
                   message: "Order assigned successfully",
@@ -257,6 +305,8 @@ exports.getDriverOrdersDAO = async (
         o.phonecode1,
         o.phone2,
         o.phonecode2,
+        o.longitude,
+        o.latitude,
         oh.houseNo as house_houseNo,
         oh.streetName as house_streetName,
         oh.city as house_city,
@@ -280,11 +330,11 @@ exports.getDriverOrdersDAO = async (
         u.image
       FROM collection_officer.driverorders do
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
-      INNER JOIN market_place.orders o ON po.orderId = o.id
-      INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
-      LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
-      LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.orders o ON po.orderId = o.id
+      INNER JOIN collection_officer.marketplaceusers u ON o.userId = u.id
+      LEFT JOIN collection_officer.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
+      LEFT JOIN collection_officer.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
       LEFT JOIN (
         -- Get only the most recent hold record for each drvOrderId
         SELECT dho1.*
@@ -382,6 +432,8 @@ exports.getDriverOrdersDAO = async (
             image: order.image,
             buildingType: order.buildingType,
             fullName: order.fullName,
+            longitude: order.longitude,
+            latitude: order.latitude,
             phone1: order.phone1,
             phonecode1: order.phonecode1,
             phone2: order.phone2,
@@ -544,6 +596,8 @@ exports.getDriverOrdersDAO = async (
             phoneNumber: group.phoneNumber,
             image: group.image,
             buildingType: group.buildingType,
+            longitude: group.longitude || null,
+            latitude: group.latitude || null,
             address: formattedAddress,
             addressDetails: group.addressDetails,
             phoneNumbers: [group.phone1, group.phone2]
@@ -622,11 +676,11 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         oa.city as apartment_city
       FROM collection_officer.driverorders do
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
-      INNER JOIN market_place.orders o ON po.orderId = o.id
-      INNER JOIN market_place.marketplaceusers u ON o.userId = u.id
-      LEFT JOIN market_place.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
-      LEFT JOIN market_place.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.orders o ON po.orderId = o.id
+      INNER JOIN collection_officer.marketplaceusers u ON o.userId = u.id
+      LEFT JOIN collection_officer.orderhouse oh ON o.id = oh.orderId AND o.buildingType = 'House'
+      LEFT JOIN collection_officer.orderapartment oa ON o.id = oa.orderId AND o.buildingType = 'Apartment'
       WHERE dom.driverId = ?
       AND do.orderId IN (?)
       ORDER BY o.id
@@ -867,7 +921,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
 
             // Update processorders status
             const updateProcessOrdersSql = `
-              UPDATE market_place.processorders
+              UPDATE collection_officer.processorders
               SET status = 'On the way'
               WHERE id IN (?)
             `;
@@ -882,7 +936,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                 }
 
                 const insertNotificationSql = `
-                  INSERT INTO market_place.dashnotification (orderId, title, readStatus, createdAt)
+                  INSERT INTO collection_officer.dashnotification (orderId, title, readStatus, createdAt)
                   VALUES ?
                 `;
 
@@ -917,7 +971,7 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                         do.startTime AS journeyStartedAt
                       FROM collection_officer.driverorders do
                       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-                      INNER JOIN market_place.processorders po 
+                      INNER JOIN collection_officer.processorders po 
                         ON do.orderId = po.id
                       WHERE dom.driverId = ?
                       AND do.orderId IN (?)
@@ -938,6 +992,26 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
                             message: "Journey started successfully",
                             updatedOrders: [],
                           });
+                        }
+
+                        // Insert customer-facing ordernotfication for "Order is On the Way"
+                        if (updatedResults.length > 0) {
+                          const onTheWayNotifValues = updatedResults.map((row) => [
+                            row.processOrderId,
+                            'Order is On the Way',
+                            `Your order #${row.invNo}, is on its way to you. Our driver will deliver your order shortly.`,
+                            0,
+                            new Date(),
+                          ]);
+                          db.collectionofficer.query(
+                            `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
+                            [onTheWayNotifValues],
+                            (errON) => {
+                              if (errON) {
+                                console.error('[startJourneyDAO] Failed to insert ordernotfication:', errON.message);
+                              }
+                            },
+                          );
                         }
 
                         resolve({
@@ -974,14 +1048,6 @@ function normalizeBuildingType(buildingType) {
   if (HOUSE_VALUES.includes(val)) return "house";
   if (APARTMENT_VALUES.includes(val)) return "apartment";
   return null;
-}
-
-// NEW: coupon helper
-function isFreeDeliveryCoupon(order) {
-  return (
-    !!order.isCoupon &&
-    (order.couponType || "").toString().trim().toLowerCase() === "free delivery"
-  );
 }
 
 function queryAsync(connection, sql, params) {
@@ -1065,9 +1131,9 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             o.couponType,
             o.couponValue,
             mu.creditBalance
-          FROM market_place.processorders po
-          JOIN market_place.orders o ON po.orderId = o.id
-          JOIN market_place.marketplaceusers mu ON o.userId = mu.id
+          FROM collection_officer.processorders po
+          JOIN collection_officer.orders o ON po.orderId = o.id
+          JOIN collection_officer.marketplaceusers mu ON o.userId = mu.id
           WHERE po.id IN (?)
         `;
 
@@ -1123,7 +1189,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               if (houseOrderIds.length > 0) {
                 const houseRows = await queryAsync(
                   connection,
-                  `SELECT orderId, city FROM market_place.orderhouse WHERE orderId IN (?)`,
+                  `SELECT orderId, city FROM collection_officer.orderhouse WHERE orderId IN (?)`,
                   [houseOrderIds],
                 );
                 houseRows.forEach((row) => {
@@ -1134,7 +1200,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
               if (apartmentOrderIds.length > 0) {
                 const apartmentRows = await queryAsync(
                   connection,
-                  `SELECT orderId, city FROM market_place.orderapartment WHERE orderId IN (?)`,
+                  `SELECT orderId, city FROM collection_officer.orderapartment WHERE orderId IN (?)`,
                   [apartmentOrderIds],
                 );
                 apartmentRows.forEach((row) => {
@@ -1340,7 +1406,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   const updatePromises = [];
 
                   const updateAllOrdersStatusQuery = `
-                    UPDATE market_place.processorders
+                    UPDATE collection_officer.processorders
                     SET
                       status = 'Delivered',
                       deliveredTime = CURRENT_TIMESTAMP,
@@ -1386,7 +1452,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       .join(" ");
 
                     const updateCashOrdersQuery = `
-                      UPDATE market_place.processorders
+                      UPDATE collection_officer.processorders
                       SET
                         isPaid = 1,
                         amount = CASE id ${amountCaseParts} END,
@@ -1418,7 +1484,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                         updatePromises.push(
                           new Promise((resolve, reject) => {
                             connection.query(
-                              `UPDATE market_place.processorders SET curDlvrCharge = ? WHERE id = ?`,
+                              `UPDATE collection_officer.processorders SET curDlvrCharge = ? WHERE id = ?`,
                               [newDeliveryCharge, processOrderId],
                               (err, result) => {
                                 if (err) {
@@ -1454,8 +1520,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       (o) => o.processOrderId,
                     );
                     const updatePayableOrdersQuery = `
-                      UPDATE market_place.processorders po
-                      JOIN market_place.orders o ON po.orderId = o.id
+                      UPDATE collection_officer.processorders po
+                      JOIN collection_officer.orders o ON po.orderId = o.id
                       SET po.isPaid = 1, po.amount = o.fullTotal
                       WHERE po.id IN (?)
                     `;
@@ -1479,7 +1545,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       updatePromises.push(
                         new Promise((resolve, reject) => {
                           connection.query(
-                            `UPDATE market_place.processorders SET curDlvrCharge = ? WHERE id = ?`,
+                            `UPDATE collection_officer.processorders SET curDlvrCharge = ? WHERE id = ?`,
                             [correctDeliveryCharge, processOrderId],
                             (err, result) => {
                               if (err) {
@@ -1517,7 +1583,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       updatePromises.push(
                         new Promise((resolve, reject) => {
                           connection.query(
-                            `UPDATE market_place.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
+                            `UPDATE collection_officer.marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?`,
                             [delta, numericUserId],
                             (err, result) => {
                               if (err) {
@@ -1568,7 +1634,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                         connection.release();
 
                         const insertNotificationSql = `
-                          INSERT INTO market_place.dashnotification (orderId, title, readStatus, createdAt)
+                          INSERT INTO collection_officer.dashnotification (orderId, title, readStatus, createdAt)
                           VALUES ?
                         `;
 
@@ -1589,6 +1655,34 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                                 errN.message,
                               );
                             }
+
+                            // Insert customer-facing ordernotfication for "Order Delivered"
+                            db.collectionofficer.query(
+                              `SELECT id, invNo FROM collection_officer.processorders WHERE id IN (?)`,
+                              [processOrderIds],
+                              (errInv, invRows) => {
+                                if (!errInv && invRows && invRows.length > 0) {
+                                  const deliveredNotifValues = invRows.map((row) => [
+                                    row.id,
+                                    'Order Delivered',
+                                    `Your order #${row.invNo}, has been successfully delivered. We hope you're happy with our service and had a great experience. Thank you for choosing us!`,
+                                    0,
+                                    new Date(),
+                                  ]);
+                                  db.collectionofficer.query(
+                                    `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
+                                    [deliveredNotifValues],
+                                    (errON) => {
+                                      if (errON) {
+                                        console.error('[saveSignatureAndUpdateStatusDAO] Failed to insert ordernotfication:', errON.message);
+                                      }
+                                    },
+                                  );
+                                } else if (errInv) {
+                                  console.error('[saveSignatureAndUpdateStatusDAO] Failed to fetch invNo for ordernotfication:', errInv.message);
+                                }
+                              },
+                            );
 
                             const statusUpdateResult = results.find(
                               (r) => r.type === "status",
@@ -1747,12 +1841,35 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
 
     // Step 5: Update processorders table status to "On the way"
 
-    await db.marketPlace.promise().query(
-      `UPDATE processorders 
+    await db.collectionofficer.promise().query(
+      `UPDATE collection_officer.processorders 
        SET status = 'On the way'
        WHERE id IN (?)`,
       [validOrderIds],
     );
+
+    // Insert customer-facing ordernotfication for "Order is On the Way Again"
+    try {
+      const [invNoRows] = await db.collectionofficer.promise().query(
+        `SELECT id, invNo FROM collection_officer.processorders WHERE id IN (?)`,
+        [validOrderIds],
+      );
+      if (invNoRows && invNoRows.length > 0) {
+        const onTheWayAgainNotifValues = invNoRows.map((row) => [
+          row.id,
+          'Order is On the Way Again',
+          `Your order #${row.invNo}, is back on the way to you. Our driver will deliver your order shortly.`,
+          0,
+          new Date(),
+        ]);
+        await db.collectionofficer.promise().query(
+          `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
+          [onTheWayAgainNotifValues],
+        );
+      }
+    } catch (notifErr) {
+      console.error('[reStartJourneyDAO] Failed to insert ordernotfication:', notifErr.message);
+    }
 
     return {
       success: true,
@@ -1767,4 +1884,26 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
     console.error("Error in reStartJourneyDAO:", error);
     throw error;
   }
+};
+
+// Get Distribution Center by ID
+exports.getDistributedCenterById = async (centerId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT id, centerName, city, district, province, country, longitude, latitude
+      FROM collection_officer.distributedcenter
+      WHERE id = ?
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql, [centerId], (err, results) => {
+      if (err) {
+        console.error(
+          "Database error getting distribution centre:",
+          err.message,
+        );
+        return reject(new Error("Failed to retrieve distribution centre"));
+      }
+      resolve(results.length > 0 ? results[0] : null);
+    });
+  });
 };

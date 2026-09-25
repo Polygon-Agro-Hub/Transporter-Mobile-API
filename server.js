@@ -1,3 +1,4 @@
+const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
@@ -5,18 +6,23 @@ require("dotenv").config();
 const {
   plantcare,
   collectionofficer,
-  marketPlace,
   admin,
 } = require("./startup/database");
+const { initSocket } = require("./socket/socket");
+
 const app = express();
+const server = http.createServer(app);
+
+// Initialize Socket.IO
+const io = initSocket(server);
 
 // Base path for the API
 const BASE_PATH = "/transporter";
 
 // CORS configuration
 const corsOptions = {
-  origin: process.env.CLIENT_ORIGIN || "http://localhost:8081",
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  origin: process.env.CLIENT_ORIGIN || "*",
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   credentials: true,
 };
 
@@ -46,7 +52,6 @@ const DatabaseConnection = (db, name) => {
 // Initial database connections
 DatabaseConnection(plantcare, "PlantCare");
 DatabaseConnection(collectionofficer, "CollectionOfficer");
-DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
 // Setup routes
@@ -57,6 +62,8 @@ const returnrote = require("./routes/return-routes");
 const holdroute = require("./routes/hold-routes");
 const homeroute = require("./routes/home-routes");
 const healthroute = require("./routes/health-routes");
+const loadroute = require("./routes/load-routes");
+const path = require('path');
 const setupSwagger = require("./startup/swagger");
 
 // Setup Swagger UI
@@ -69,7 +76,20 @@ app.use(`${BASE_PATH}/api/order`, orderroute);
 app.use(`${BASE_PATH}/api/return`, returnrote);
 app.use(`${BASE_PATH}/api/hold`, holdroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
+app.use(`${BASE_PATH}/api/load`, loadroute);
 app.use(`${BASE_PATH}`, healthroute);
+
+// ─── App Version Policy ────────────────────────────────────────────────────────
+// Returns the version policy JSON that controls in-app update prompts in the
+// mobile app. Edit remote-config/app-version.json to trigger or stop prompts
+// without redeploying code.
+app.get(`${BASE_PATH}/api/app-version`, (req, res) => {
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.set('Content-Type', 'application/json');
+  res.sendFile(path.join(__dirname, 'remote-config', 'app-version.json'));
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -79,11 +99,14 @@ app.use((err, req, res, next) => {
 
 // Start the server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🔌 Socket.IO initialized`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`📍 Base Path: ${BASE_PATH}`);
   console.log(`💓 Health Check URL: ${BASE_PATH}/health`);
 });
 
+app.server = server;
+app.io = io;
 module.exports = app;

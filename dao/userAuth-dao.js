@@ -1,22 +1,25 @@
 const db = require("../startup/database");
 const bcrypt = require("bcrypt");
+const { ROLES } = require("../constants/user-roles");
 
 // Login User
 exports.loginUser = async (empId, password) => {
   try {
     const sql = `
       SELECT 
-        empId, 
-        password, 
-        id, 
-        passwordUpdated,
-        firstNameEnglish,
-        lastNameEnglish,
-        image,
-        status  
-      FROM collectionofficer
-      WHERE empId = ? 
-        AND jobRole = "Driver"
+        co.empId, 
+        co.password, 
+        co.id, 
+        co.passwordUpdated,
+        co.firstNameEnglish,
+        co.lastNameEnglish,
+        co.image,
+        co.status,
+        co.jobRole,
+        co.QRcode
+      FROM collectionofficer co
+      WHERE co.empId = ?
+      ORDER BY co.id DESC
     `;
 
     const [results] = await db.collectionofficer.promise().query(sql, [empId]);
@@ -25,25 +28,43 @@ exports.loginUser = async (empId, password) => {
       throw new Error("User not found");
     }
 
-    const user = results[0];
+    let user = null;
+    let passwordMatches = false;
+    let rejectionError = null;
 
-    if (user.status === "Rejected") {
-      throw new Error("This Employee ID is rejected");
+    for (const u of results) {
+      if (u.status === "Rejected") {
+        rejectionError = "This Employee ID is rejected";
+        continue;
+      }
+      if (u.status === "Not Approved") {
+        rejectionError = "This Employee ID is not approved";
+        continue;
+      }
+      if (u.status !== "Approved") {
+        rejectionError = "Account status is pending verification";
+        continue;
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, u.password);
+      if (isPasswordValid) {
+        user = u;
+        passwordMatches = true;
+        break;
+      }
     }
 
-    if (user.status === "Not Approved") {
-      throw new Error("This Employee ID is not approved");
-    }
-
-    if (user.status !== "Approved") {
-      throw new Error("Account status is pending verification");
-    }
-
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-
-    if (!isPasswordValid) {
+    if (!passwordMatches) {
+      if (rejectionError && !results.some((r) => r.status === "Approved")) {
+        throw new Error(rejectionError);
+      }
       throw new Error("Invalid password");
     }
+
+    const jobRole =
+      user.jobRole === ROLES.HEAVY_WEIGHT_DRIVER
+        ? ROLES.HEAVY_WEIGHT_DRIVER
+        : ROLES.LIGHT_WEIGHT_DRIVER;
 
     return {
       success: true,
@@ -53,6 +74,9 @@ exports.loginUser = async (empId, password) => {
       firstNameEnglish: user.firstNameEnglish,
       lastNameEnglish: user.lastNameEnglish,
       image: user.image,
+      jobRole: jobRole,
+      QRcode: user.QRcode || null,
+      qrCode: user.QRcode || null,
     };
   } catch (err) {
     throw new Error(err.message);
@@ -105,7 +129,7 @@ exports.changePassword = async (officerId, currentPassword, newPassword) => {
 };
 
 // Get User Profile
-exports.getUserProfile = async (empId) => {
+exports.getUserProfile = async (empId, officerId) => {
   try {
     const sql = `
       SELECT 
@@ -117,24 +141,41 @@ exports.getUserProfile = async (empId) => {
         co.nic,
         co.email,
         co.image,
+        co.jobRole,
         co.passwordUpdated,
         co.createdAt,
+        co.QRcode,
+        co.companyId,
         vr.vType,
-        vr.vRegNo
+        vr.vRegNo,
+        c.companyNameEnglish,
+        c.companyNameSinhala,
+        c.companyNameTamil,
+        c.logo AS companyLogo
       FROM collectionofficer co
       LEFT JOIN vehicleregistration vr ON co.id = vr.coId
-      WHERE co.empId = ? 
+      LEFT JOIN company c ON co.companyId = c.id
+      WHERE (co.id = ? OR (co.empId = ? AND ? IS NULL))
         AND co.status = "Approved"
+      ORDER BY co.id DESC
     `;
 
-    const [results] = await db.collectionofficer.promise().query(sql, [empId]);
+    const [results] = await db.collectionofficer.promise().query(sql, [
+      officerId || null,
+      empId,
+      officerId || null,
+    ]);
 
     if (results.length === 0) {
-      // Throw a specific error that can be caught in controller
       throw new Error("USER_NOT_FOUND");
     }
 
     const user = results[0];
+
+    const exactJobRole =
+      user.jobRole === ROLES.HEAVY_WEIGHT_DRIVER
+        ? ROLES.HEAVY_WEIGHT_DRIVER
+        : ROLES.LIGHT_WEIGHT_DRIVER;
 
     return {
       empId: user.empId,
@@ -145,13 +186,22 @@ exports.getUserProfile = async (empId) => {
       nic: user.nic || "",
       email: user.email || "",
       image: user.image || "",
+      jobRole: exactJobRole,
       passwordUpdated: user.passwordUpdated ?? 0,
       createdAt: user.createdAt || "",
       vType: user.vType || null,
       vRegNo: user.vRegNo || null,
+      QRcode: user.QRcode || null,
+      qrCode: user.QRcode || null,
+      company: {
+        id: user.companyId || null,
+        nameEnglish: user.companyNameEnglish || "",
+        nameSinhala: user.companyNameSinhala || "",
+        nameTamil: user.companyNameTamil || "",
+        logo: user.companyLogo || null,
+      },
     };
   } catch (err) {
-    // Re-throw the error with proper context
     if (err.message === "USER_NOT_FOUND") {
       throw new Error("User not found or account not approved");
     }
@@ -203,7 +253,7 @@ exports.getEarnings = async (driverId, date) => {
         po.paymentMethod,
         po.status
       FROM collection_officer.driverorders do
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE dom.driverId = ?
         AND DATE(do.createdAt) = ?
@@ -268,7 +318,7 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
         po.status,
         do.createdAt
       FROM collection_officer.driverorders do
-      INNER JOIN market_place.processorders po ON do.orderId = po.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE dom.driverId = ?
         AND DATE(do.createdAt) BETWEEN ? AND ?
