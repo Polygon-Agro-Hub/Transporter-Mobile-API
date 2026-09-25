@@ -7,55 +7,64 @@ exports.loginUser = async (empId, password) => {
   try {
     const sql = `
       SELECT 
-        empId, 
-        password, 
-        id, 
-        passwordUpdated,
-        firstNameEnglish,
-        lastNameEnglish,
-        image,
-        status,
-        jobRole,
-        QRcode
-      FROM collectionofficer
-      WHERE empId = ? 
-        AND (jobRole IN (?, ?) OR jobRole = "Driver")
+        co.empId, 
+        co.password, 
+        co.id, 
+        co.passwordUpdated,
+        co.firstNameEnglish,
+        co.lastNameEnglish,
+        co.image,
+        co.status,
+        co.jobRole,
+        co.QRcode
+      FROM collectionofficer co
+      WHERE co.empId = ?
+      ORDER BY co.id DESC
     `;
 
-    const [results] = await db.collectionofficer.promise().query(sql, [
-      empId,
-      ROLES.LIGHT_WEIGHT_DRIVER,
-      ROLES.HEAVY_WEIGHT_DRIVER,
-    ]);
+    const [results] = await db.collectionofficer.promise().query(sql, [empId]);
 
     if (results.length === 0) {
       throw new Error("User not found");
     }
 
-    const user = results[0];
+    let user = null;
+    let passwordMatches = false;
+    let rejectionError = null;
 
-    if (user.status === "Rejected") {
-      throw new Error("This Employee ID is rejected");
+    for (const u of results) {
+      if (u.status === "Rejected") {
+        rejectionError = "This Employee ID is rejected";
+        continue;
+      }
+      if (u.status === "Not Approved") {
+        rejectionError = "This Employee ID is not approved";
+        continue;
+      }
+      if (u.status !== "Approved") {
+        rejectionError = "Account status is pending verification";
+        continue;
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, u.password);
+      if (isPasswordValid) {
+        user = u;
+        passwordMatches = true;
+        break;
+      }
     }
 
-    if (user.status === "Not Approved") {
-      throw new Error("This Employee ID is not approved");
-    }
-
-    if (user.status !== "Approved") {
-      throw new Error("Account status is pending verification");
-    }
-
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-
-    if (!isPasswordValid) {
+    if (!passwordMatches) {
+      if (rejectionError && !results.some((r) => r.status === "Approved")) {
+        throw new Error(rejectionError);
+      }
       throw new Error("Invalid password");
     }
 
-    const normalizedJobRole =
-      user.jobRole === "Driver"
-        ? ROLES.LIGHT_WEIGHT_DRIVER
-        : user.jobRole || ROLES.LIGHT_WEIGHT_DRIVER;
+    const jobRole =
+      user.jobRole === ROLES.HEAVY_WEIGHT_DRIVER
+        ? ROLES.HEAVY_WEIGHT_DRIVER
+        : ROLES.LIGHT_WEIGHT_DRIVER;
 
     return {
       success: true,
@@ -65,7 +74,7 @@ exports.loginUser = async (empId, password) => {
       firstNameEnglish: user.firstNameEnglish,
       lastNameEnglish: user.lastNameEnglish,
       image: user.image,
-      jobRole: normalizedJobRole,
+      jobRole: jobRole,
       QRcode: user.QRcode || null,
       qrCode: user.QRcode || null,
     };
@@ -120,7 +129,7 @@ exports.changePassword = async (officerId, currentPassword, newPassword) => {
 };
 
 // Get User Profile
-exports.getUserProfile = async (empId) => {
+exports.getUserProfile = async (empId, officerId) => {
   try {
     const sql = `
       SELECT 
@@ -146,11 +155,16 @@ exports.getUserProfile = async (empId) => {
       FROM collectionofficer co
       LEFT JOIN vehicleregistration vr ON co.id = vr.coId
       LEFT JOIN company c ON co.companyId = c.id
-      WHERE co.empId = ? 
+      WHERE (co.id = ? OR (co.empId = ? AND ? IS NULL))
         AND co.status = "Approved"
+      ORDER BY co.id DESC
     `;
 
-    const [results] = await db.collectionofficer.promise().query(sql, [empId]);
+    const [results] = await db.collectionofficer.promise().query(sql, [
+      officerId || null,
+      empId,
+      officerId || null,
+    ]);
 
     if (results.length === 0) {
       throw new Error("USER_NOT_FOUND");
@@ -158,10 +172,10 @@ exports.getUserProfile = async (empId) => {
 
     const user = results[0];
 
-    const normalizedJobRole =
-      user.jobRole === "Driver"
-        ? ROLES.LIGHT_WEIGHT_DRIVER
-        : user.jobRole || ROLES.LIGHT_WEIGHT_DRIVER;
+    const exactJobRole =
+      user.jobRole === ROLES.HEAVY_WEIGHT_DRIVER
+        ? ROLES.HEAVY_WEIGHT_DRIVER
+        : ROLES.LIGHT_WEIGHT_DRIVER;
 
     return {
       empId: user.empId,
@@ -172,7 +186,7 @@ exports.getUserProfile = async (empId) => {
       nic: user.nic || "",
       email: user.email || "",
       image: user.image || "",
-      jobRole: normalizedJobRole,
+      jobRole: exactJobRole,
       passwordUpdated: user.passwordUpdated ?? 0,
       createdAt: user.createdAt || "",
       vType: user.vType || null,

@@ -155,7 +155,8 @@ exports.getProfile = asyncHandler(async (req, res) => {
       });
     }
 
-    const userProfile = await userDao.getUserProfile(empId);
+    const officerId = req.user.id;
+    const userProfile = await userDao.getUserProfile(empId, officerId);
 
     return res.status(200).json({
       success: true,
