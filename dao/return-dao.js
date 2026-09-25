@@ -1,5 +1,6 @@
 const db = require("../startup/database");
 const { HANDLING_FEE_CONSTANTS } = require("../constants/handling-fee");
+const axios = require("axios");
 
 // Get All Return Reasons
 exports.getReason = async () => {
@@ -88,9 +89,12 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
             o.buildingType,
             o.isCoupon,
             o.couponType,
-            o.userId
+            o.userId,
+            mu.phoneCode,
+            mu.phoneNumber
           FROM collection_officer.processorders po
           JOIN collection_officer.orders o ON po.orderId = o.id
+          LEFT JOIN collection_officer.marketplaceusers mu ON o.userId = mu.id
           WHERE po.id IN (?)
         `;
 
@@ -700,7 +704,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
 
                                         connection.release();
 
-                                        // Insert customer-facing ordernotfication for "Order Returned"
                                         db.collectionofficer.query(
                                           `SELECT rsnEnglish FROM collection_officer.returnreason WHERE id = ? LIMIT 1`,
                                           [returnReasonId],
@@ -724,6 +727,55 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                                 }
                                               },
                                             );
+
+                                            // Send SMS to customer for each returned order (fire-and-forget)
+                                            const SMS_API_URL = process.env.SMS_API_URL || "https://api.getshoutout.com/coreservice/messages";
+                                            const apiKey = process.env.SHOUTOUT_API_KEY;
+                                            const smsHeaders = {
+                                              "Content-Type": "application/json",
+                                              ...(apiKey ? { Authorization: `Apikey ${apiKey}` } : {}),
+                                            };
+
+                                            invoiceResult.forEach((row) => {
+                                              try {
+                                                const rawPhone = (row.phoneNumber || "").toString().trim();
+                                                let digitsOnly = rawPhone.replace(/\D/g, "");
+                                                if (!digitsOnly) return;
+
+                                                const code = (row.phoneCode || "94").toString().replace(/\D/g, "") || "94";
+                                                if (digitsOnly.startsWith("0")) {
+                                                  digitsOnly = digitsOnly.substring(1);
+                                                }
+                                                if (digitsOnly.startsWith(code)) {
+                                                  digitsOnly = digitsOnly.substring(code.length);
+                                                }
+                                                const cleanedPhoneNumber = `+${code}${digitsOnly}`;
+
+                                                const smsMessage = `Your order ${row.invNo} has been returned by the driver.\nReason: ${reasonText}`;
+
+                                                const body = {
+                                                  source: "PolygonAgro",
+                                                  transport: "sms",
+                                                  transports: ["sms"],
+                                                  content: {
+                                                    sms: smsMessage,
+                                                  },
+                                                  destination: cleanedPhoneNumber,
+                                                  destinations: [cleanedPhoneNumber],
+                                                };
+
+                                                axios.post(SMS_API_URL, body, {
+                                                  headers: smsHeaders,
+                                                  timeout: 15000,
+                                                }).then((res) => {
+                                                  console.log(`[submitReturn] SMS sent for order ${row.invNo} to ${cleanedPhoneNumber}:`, res.data);
+                                                }).catch((smsErr) => {
+                                                  console.error(`[submitReturn] Failed to send SMS for order ${row.invNo}:`, smsErr.response?.data || smsErr.message);
+                                                });
+                                              } catch (smsErr) {
+                                                console.error(`[submitReturn] Error preparing SMS for order ${row.invNo}:`, smsErr.message);
+                                              }
+                                            });
                                           },
                                         );
 

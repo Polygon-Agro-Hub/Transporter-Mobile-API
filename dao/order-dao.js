@@ -66,22 +66,8 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
               mainId = insertMainResult.insertId;
             }
 
-            // Explicit duplicate guard: check if this order already exists under the current session
-            const duplicateCheck = await queryAsync(
-              connection,
-              "SELECT id FROM collection_officer.driverorders WHERE drvOrderMainId = ? AND orderId = ? LIMIT 1",
-              [mainId, processOrderId],
-            );
-
-            if (duplicateCheck.length > 0) {
-              return connection.rollback(() => {
-                connection.release();
-                reject(new Error("This order is already in your target list."));
-              });
-            }
-
             const insertSql = `
-              INSERT INTO collection_officer.driverorders
+              INSERT IGNORE INTO collection_officer.driverorders
               (drvOrderMainId, orderId, drvStatus, createdAt)
               VALUES (?, ?, 'Todo', NOW())
             `;
@@ -200,20 +186,16 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
 // Check If Order Is Already Assigned
 exports.CheckOrderAlreadyAssigned = async (processOrderId, driverId) => {
   return new Promise((resolve, reject) => {
-    // Check across ALL sessions (not just active) to fully prevent duplicates
     const sql = `
       SELECT 
           do.id as driverOrderId,
-          do.drvStatus,
           dom.driverId as assignedDriverId,
-          dom.isHandOver,
           co.empId as assignedDriverEmpId,
           CONCAT(co.firstNameEnglish, ' ', co.lastNameEnglish) as assignedDriverName
       FROM collection_officer.driverorders do
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
-      WHERE do.orderId = ?
-      ORDER BY do.id DESC
+      WHERE do.orderId = ?  -- direct FK match
       LIMIT 1
     `;
 
@@ -227,7 +209,6 @@ exports.CheckOrderAlreadyAssigned = async (processOrderId, driverId) => {
         const assignment = results[0];
 
         if (assignment.assignedDriverId == driverId) {
-          // Same driver already has this order (any session)
           resolve({
             isAssigned: true,
             assignedToSameDriver: true,
