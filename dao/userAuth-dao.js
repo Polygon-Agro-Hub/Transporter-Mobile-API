@@ -136,10 +136,16 @@ exports.getUserProfile = async (empId) => {
         co.passwordUpdated,
         co.createdAt,
         co.QRcode,
+        co.companyId,
         vr.vType,
-        vr.vRegNo
+        vr.vRegNo,
+        c.companyNameEnglish,
+        c.companyNameSinhala,
+        c.companyNameTamil,
+        c.logo AS companyLogo
       FROM collectionofficer co
       LEFT JOIN vehicleregistration vr ON co.id = vr.coId
+      LEFT JOIN company c ON co.companyId = c.id
       WHERE co.empId = ? 
         AND co.status = "Approved"
     `;
@@ -147,7 +153,6 @@ exports.getUserProfile = async (empId) => {
     const [results] = await db.collectionofficer.promise().query(sql, [empId]);
 
     if (results.length === 0) {
-      // Throw a specific error that can be caught in controller
       throw new Error("USER_NOT_FOUND");
     }
 
@@ -174,9 +179,15 @@ exports.getUserProfile = async (empId) => {
       vRegNo: user.vRegNo || null,
       QRcode: user.QRcode || null,
       qrCode: user.QRcode || null,
+      company: {
+        id: user.companyId || null,
+        nameEnglish: user.companyNameEnglish || "",
+        nameSinhala: user.companyNameSinhala || "",
+        nameTamil: user.companyNameTamil || "",
+        logo: user.companyLogo || null,
+      },
     };
   } catch (err) {
-    // Re-throw the error with proper context
     if (err.message === "USER_NOT_FOUND") {
       throw new Error("User not found or account not approved");
     }
