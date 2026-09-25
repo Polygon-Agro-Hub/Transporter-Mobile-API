@@ -66,6 +66,24 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
               mainId = insertMainResult.insertId;
             }
 
+            // Check if order is already assigned
+            const existingOrder = await queryAsync(
+              connection,
+              "SELECT id FROM collection_officer.driverorders WHERE orderId = ? LIMIT 1 FOR UPDATE",
+              [processOrderId],
+            );
+
+            if (existingOrder.length > 0) {
+              return connection.rollback(() => {
+                connection.release();
+                reject(
+                  new Error(
+                    "This order has already been assigned to another driver.",
+                  ),
+                );
+              });
+            }
+
             const insertSql = `
               INSERT IGNORE INTO collection_officer.driverorders
               (drvOrderMainId, orderId, drvStatus, createdAt)

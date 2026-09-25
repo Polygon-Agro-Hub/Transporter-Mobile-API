@@ -236,6 +236,8 @@ exports.scanDcmGenerateOtp = asyncHandler(async (req, res) => {
     const statusCode = error.statusCode || 500;
     return res.status(statusCode).json({
       status: "error",
+      currentStatus: error.currentStatus,
+      errorType: error.errorType,
       message: error.message || "Failed to process QR and generate OTP",
     });
   }
@@ -271,6 +273,8 @@ exports.resendReturnOtp = asyncHandler(async (req, res) => {
     const statusCode = error.statusCode || 500;
     return res.status(statusCode).json({
       status: "error",
+      currentStatus: error.currentStatus,
+      errorType: error.errorType,
       message: error.message || "Failed to resend OTP",
     });
   }
@@ -313,6 +317,7 @@ exports.verifyOtpReturnReceived = asyncHandler(async (req, res) => {
     const statusCode = error.statusCode || 500;
     return res.status(statusCode).json({
       status: "error",
+      currentStatus: error.currentStatus,
       errorType: error.errorType || "ERROR",
       message: error.message || "Failed to verify OTP",
     });
