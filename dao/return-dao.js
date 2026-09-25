@@ -729,7 +729,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                             );
 
                                             // Send SMS to customer for each returned order (fire-and-forget)
-                                            const SMS_API_URL = process.env.SMS_API_URL || "https://api.getshoutout.com/coreservice/messages";
+                                            const SHOUTOUT_API_URL = process.env.SHOUTOUT_API_URL || "https://api.getshoutout.com/coreservice/messages";
                                             const apiKey = process.env.SHOUTOUT_API_KEY;
                                             const smsHeaders = {
                                               "Content-Type": "application/json",
@@ -764,7 +764,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                                   destinations: [cleanedPhoneNumber],
                                                 };
 
-                                                axios.post(SMS_API_URL, body, {
+                                                axios.post(SHOUTOUT_API_URL, body, {
                                                   headers: smsHeaders,
                                                   timeout: 15000,
                                                 }).then((res) => {
@@ -1296,7 +1296,6 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
         INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
         INNER JOIN collection_officer.processorders po ON do.orderId = po.id
         WHERE dom.driverId = ?
-          AND do.drvStatus = 'Return'
       `;
       const orderParams = [driverId];
 
@@ -1307,7 +1306,7 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
         orderSql += " AND (po.id = ? OR do.id = ?)";
         orderParams.push(orderId, orderId);
       }
-      orderSql += " LIMIT 1";
+      orderSql += " ORDER BY do.id DESC LIMIT 1";
 
       db.collectionofficer.query(orderSql, orderParams, (orderErr, orderResults) => {
         if (orderErr) {
@@ -1315,40 +1314,83 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
           return reject(new Error("Failed to find return order"));
         }
 
-        if (orderResults.length === 0) {
-          const err = new Error("Return order not found or not in 'Return' status");
-          err.statusCode = 404;
-          return reject(err);
-        }
-
-        const driverOrder = orderResults[0];
-        const otpCode = Math.floor(10000 + Math.random() * 90000); // 5-digit OTP
-
-        const insertSql = `
-          INSERT INTO collection_officer.handoverreturnorder (drvOrderId, handOverOfficerId, otpCode, expireTime, createdAt)
-          VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 2 MINUTE), NOW())
-        `;
-
-        db.collectionofficer.query(insertSql, [driverOrder.driverOrderId, officer.id, otpCode], (insertErr, insertResult) => {
-          if (insertErr) {
-            console.error("Database error inserting handover return OTP:", insertErr.message);
-            return reject(new Error("Failed to generate OTP"));
+        const proceedWithOrder = (driverOrder) => {
+          if (!driverOrder) {
+            const err = new Error("Return order not found");
+            err.statusCode = 404;
+            return reject(err);
           }
 
-          console.log(`🔑 [Return Order OTP] Order: ${driverOrder.invNo}, drvOrderId: ${driverOrder.driverOrderId}, Officer: ${officer.empId}, OTP: ${otpCode}`);
+          if (driverOrder.drvStatus === "Return Received") {
+            const err = new Error("This order has already been returned to the center and cannot proceed again!");
+            err.statusCode = 400;
+            err.currentStatus = "Return Received";
+            return reject(err);
+          }
 
-          resolve({
-            drvOrderId: driverOrder.driverOrderId,
-            processOrderId: driverOrder.processOrderId,
-            invoiceNumber: driverOrder.invNo,
-            dcmEmpId: officer.empId,
-            officerId: officer.id,
-            officerName: officer.firstNameEnglish || officer.empId,
-            otpId: insertResult.insertId,
-            otpCode: otpCode,
-            expiresInSeconds: 120,
+          if (driverOrder.drvStatus !== "Return") {
+            const err = new Error(`Order is not in Return status (current: ${driverOrder.drvStatus})`);
+            err.statusCode = 400;
+            err.currentStatus = driverOrder.drvStatus;
+            return reject(err);
+          }
+
+          const otpCode = Math.floor(10000 + Math.random() * 90000); // 5-digit OTP
+
+          const insertSql = `
+            INSERT INTO collection_officer.handoverreturnorder (drvOrderId, handOverOfficerId, otpCode, expireTime, createdAt)
+            VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 2 MINUTE), NOW())
+          `;
+
+          db.collectionofficer.query(insertSql, [driverOrder.driverOrderId, officer.id, otpCode], (insertErr, insertResult) => {
+            if (insertErr) {
+              console.error("Database error inserting handover return OTP:", insertErr.message);
+              return reject(new Error("Failed to generate OTP"));
+            }
+
+            console.log(`🔑 [Return Order OTP] Order: ${driverOrder.invNo}, drvOrderId: ${driverOrder.driverOrderId}, Officer: ${officer.empId}, OTP: ${otpCode}`);
+
+            resolve({
+              drvOrderId: driverOrder.driverOrderId,
+              processOrderId: driverOrder.processOrderId,
+              invoiceNumber: driverOrder.invNo,
+              dcmEmpId: officer.empId,
+              officerId: officer.id,
+              officerName: officer.firstNameEnglish || officer.empId,
+              otpId: insertResult.insertId,
+              otpCode: otpCode,
+              expiresInSeconds: 120,
+            });
           });
-        });
+        };
+
+        if (orderResults.length === 0) {
+          // Fallback check across all driverorders/processorders to detect if order exists and is already Return Received
+          let fallbackSql = `
+            SELECT do.id as driverOrderId, do.drvStatus, po.id as processOrderId, po.invNo
+            FROM collection_officer.driverorders do
+            INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+            WHERE 1=1
+          `;
+          const fallbackParams = [];
+          if (invoiceNumber) {
+            fallbackSql += " AND (po.invNo = ? OR po.id = ?)";
+            fallbackParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
+          } else if (orderId) {
+            fallbackSql += " AND (po.id = ? OR do.id = ?)";
+            fallbackParams.push(orderId, orderId);
+          }
+          fallbackSql += " ORDER BY do.id DESC LIMIT 1";
+
+          db.collectionofficer.query(fallbackSql, fallbackParams, (fErr, fRes) => {
+            if (!fErr && fRes.length > 0) {
+              return proceedWithOrder(fRes[0]);
+            }
+            return proceedWithOrder(null);
+          });
+        } else {
+          proceedWithOrder(orderResults[0]);
+        }
       });
     });
   });
@@ -1390,6 +1432,13 @@ exports.resendReturnOtp = async ({ drvOrderId, dcmEmpId, driverId, orderId, invo
       }
 
       const driverOrder = findResults[0];
+
+      if (driverOrder.drvStatus === "Return Received") {
+        const err = new Error("This order has already been marked as Return Received");
+        err.statusCode = 400;
+        err.currentStatus = "Return Received";
+        return reject(err);
+      }
 
       const officerSql = `
         SELECT co.id, co.empId, co.firstNameEnglish, co.status
@@ -1483,6 +1532,7 @@ exports.verifyOtpReturnReceived = async ({ drvOrderId, orderId, invoiceNumber, o
       if (driverOrder.drvStatus === "Return Received") {
         const err = new Error("This order has already been marked as Return Received");
         err.statusCode = 400;
+        err.currentStatus = "Return Received";
         return reject(err);
       }
 
