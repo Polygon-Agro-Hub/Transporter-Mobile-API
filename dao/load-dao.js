@@ -56,7 +56,7 @@ exports.getDriverLoads = async (driverId, status = "all") => {
         tl.journeyStatus,
         tl.recomandation,
         tl.createdAt,
-        COALESCE(dc.centerName, 'Colombo Distribution Centre') as destinationCenterName,
+        COALESCE(dc.centerName, '') as destinationCenterName,
         COALESCE(dc.city, '') as destinationCity,
         COALESCE(colc.centerName, '') as sourceCenterName,
         COUNT(DISTINCT li.id) as totalItemsCount,
@@ -94,9 +94,7 @@ exports.getDriverLoads = async (driverId, status = "all") => {
           id: `#${String(index + 1).padStart(2, "0")}`,
           loadId: row.id,
           loadCode: row.transferCode,
-          destination: row.destinationCenterName
-            ? `${row.destinationCenterName}${row.destinationCity ? " - " + row.destinationCity : ""}`
-            : "Colombo Distribution Centre",
+          destination: row.destinationCenterName,
           destinationCity: row.destinationCity,
           sourceCenter: row.sourceCenterName,
           status: isDelivered ? "delivered" : "todo",
