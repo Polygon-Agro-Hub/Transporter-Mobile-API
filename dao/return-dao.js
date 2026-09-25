@@ -1201,137 +1201,142 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
  */
 exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, driverId }) => {
   return new Promise((resolve, reject) => {
-    // Helper to find officer:
-    // 1. If explicit DCM empId passed
-    // 2. Else find driver's irmId officer
-    // 3. Else find approved DCM in driver's distribution center
-    const findOfficer = (cb) => {
-      const upperEmpId = String(dcmEmpId || "").trim().toUpperCase();
-      if (upperEmpId.startsWith("DCM")) {
-        const officerSql = `
-          SELECT id, empId, firstNameEnglish, lastNameEnglish, status, distributedCenterId
-          FROM collection_officer.collectionofficer
-          WHERE (empId = ? OR empId = ?)
-          LIMIT 1
-        `;
-        db.collectionofficer.query(officerSql, [dcmEmpId, upperEmpId], (err, res) => {
-          if (!err && res.length > 0 && res[0].status === "Approved") {
-            return cb(null, res[0]);
-          }
-          fallbackOfficer();
-        });
-      } else {
-        fallbackOfficer();
+    // 1. First locate the return order
+    let orderSql = `
+      SELECT 
+        do.id as driverOrderId,
+        do.drvStatus,
+        po.id as processOrderId,
+        po.invNo,
+        po.status as processStatus
+      FROM collection_officer.driverorders do
+      INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+      WHERE dom.driverId = ?
+    `;
+    const orderParams = [driverId];
+
+    if (invoiceNumber && orderId) {
+      orderSql += " AND (po.invNo = ? OR po.id = ? OR do.orderId = ? OR do.id = ?)";
+      orderParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10), orderId, orderId);
+    } else if (invoiceNumber) {
+      orderSql += " AND (po.invNo = ? OR po.id = ? OR do.id = ?)";
+      orderParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
+    } else if (orderId) {
+      orderSql += " AND (po.id = ? OR do.orderId = ? OR do.id = ?)";
+      orderParams.push(orderId, orderId, orderId);
+    }
+    orderSql += " ORDER BY do.id DESC LIMIT 1";
+
+    db.collectionofficer.query(orderSql, orderParams, (orderErr, orderResults) => {
+      if (orderErr) {
+        console.error("Database error fetching return order:", orderErr.message);
+        return reject(new Error("Failed to find return order"));
       }
 
-      function fallbackOfficer() {
-        // Try driver's irmId
-        const driverSql = `
-          SELECT d.irmId, d.distributedCenterId,
-                 irm.id as irmIdVal, irm.empId as irmEmpId, irm.firstNameEnglish as irmFirstName,
-                 irm.status as irmStatus
-          FROM collection_officer.collectionofficer d
-          LEFT JOIN collection_officer.collectionofficer irm ON d.irmId = irm.id
-          WHERE d.id = ?
-          LIMIT 1
-        `;
-        db.collectionofficer.query(driverSql, [driverId], (dErr, dRes) => {
-          if (!dErr && dRes.length > 0) {
-            const drv = dRes[0];
-            if (drv.irmIdVal && drv.irmEmpId && (drv.irmStatus === "Approved" || drv.irmStatus === "Active")) {
-              return cb(null, {
-                id: drv.irmIdVal,
-                empId: drv.irmEmpId,
-                firstNameEnglish: drv.irmFirstName || drv.irmEmpId,
-                status: drv.irmStatus,
-              });
-            }
-
-            // Fallback: find approved DCM in driver's center
-            const dcId = drv.distributedCenterId || 66;
-            const centerDcmSql = `
-              SELECT id, empId, firstNameEnglish, lastNameEnglish, status
-              FROM collection_officer.collectionofficer
-              WHERE (distributedCenterId = ? OR UPPER(empId) LIKE 'DCM%')
-                AND status = 'Approved'
-                AND UPPER(empId) LIKE 'DCM%'
-              LIMIT 1
-            `;
-            db.collectionofficer.query(centerDcmSql, [dcId], (cErr, cRes) => {
-              if (!cErr && cRes.length > 0) {
-                return cb(null, cRes[0]);
-              }
-              // Ultimate fallback: any approved DCM
-              db.collectionofficer.query(
-                `SELECT id, empId, firstNameEnglish, status FROM collection_officer.collectionofficer WHERE UPPER(empId) LIKE 'DCM%' AND status = 'Approved' LIMIT 1`,
-                (aErr, aRes) => {
-                  if (!aErr && aRes.length > 0) {
-                    return cb(null, aRes[0]);
-                  }
-                  cb(new Error("No approved Distribution Centre Manager found"));
-                }
-              );
-            });
-          } else {
-            cb(new Error("Driver record not found"));
-          }
-        });
-      }
-    };
-
-    findOfficer((officerErr, officer) => {
-      if (officerErr || !officer) {
-        const err = officerErr || new Error("Distribution Centre Manager not found in the system");
-        err.statusCode = 404;
-        return reject(err);
-      }
-
-      let orderSql = `
-        SELECT 
-          do.id as driverOrderId,
-          do.drvStatus,
-          po.id as processOrderId,
-          po.invNo
-        FROM collection_officer.driverorders do
-        INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-        INNER JOIN collection_officer.processorders po ON do.orderId = po.id
-        WHERE dom.driverId = ?
-      `;
-      const orderParams = [driverId];
-
-      if (invoiceNumber) {
-        orderSql += " AND (po.invNo = ? OR po.id = ?)";
-        orderParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
-      } else if (orderId) {
-        orderSql += " AND (po.id = ? OR do.id = ?)";
-        orderParams.push(orderId, orderId);
-      }
-      orderSql += " ORDER BY do.id DESC LIMIT 1";
-
-      db.collectionofficer.query(orderSql, orderParams, (orderErr, orderResults) => {
-        if (orderErr) {
-          console.error("Database error fetching return order:", orderErr.message);
-          return reject(new Error("Failed to find return order"));
+      const proceedWithOrder = (driverOrder) => {
+        if (!driverOrder) {
+          const err = new Error("Return order not found");
+          err.statusCode = 404;
+          return reject(err);
         }
 
-        const proceedWithOrder = (driverOrder) => {
-          if (!driverOrder) {
-            const err = new Error("Return order not found");
+        const isReturnReceived =
+          driverOrder.drvStatus === "Return Received" ||
+          driverOrder.processStatus === "Return Received" ||
+          String(driverOrder.drvStatus || "").toLowerCase().includes("return received") ||
+          String(driverOrder.processStatus || "").toLowerCase().includes("return received");
+
+        if (isReturnReceived) {
+          const err = new Error("This order has already been returned to the center and cannot proceed again!");
+          err.statusCode = 400;
+          err.currentStatus = "Return Received";
+          return reject(err);
+        }
+
+        if (driverOrder.drvStatus !== "Return") {
+          const err = new Error(`Order is not in Return status (current: ${driverOrder.drvStatus})`);
+          err.statusCode = 400;
+          err.currentStatus = driverOrder.drvStatus;
+          return reject(err);
+        }
+
+        // 2. Find officer to issue OTP
+        const findOfficer = (cb) => {
+          const upperEmpId = String(dcmEmpId || "").trim().toUpperCase();
+          if (upperEmpId.startsWith("DCM")) {
+            const officerSql = `
+              SELECT id, empId, firstNameEnglish, lastNameEnglish, status, distributedCenterId
+              FROM collection_officer.collectionofficer
+              WHERE (empId = ? OR empId = ?)
+              LIMIT 1
+            `;
+            db.collectionofficer.query(officerSql, [dcmEmpId, upperEmpId], (err, res) => {
+              if (!err && res.length > 0 && res[0].status === "Approved") {
+                return cb(null, res[0]);
+              }
+              fallbackOfficer();
+            });
+          } else {
+            fallbackOfficer();
+          }
+
+          function fallbackOfficer() {
+            const driverSql = `
+              SELECT d.irmId, d.distributedCenterId,
+                     irm.id as irmIdVal, irm.empId as irmEmpId, irm.firstNameEnglish as irmFirstName,
+                     irm.status as irmStatus
+              FROM collection_officer.collectionofficer d
+              LEFT JOIN collection_officer.collectionofficer irm ON d.irmId = irm.id
+              WHERE d.id = ?
+              LIMIT 1
+            `;
+            db.collectionofficer.query(driverSql, [driverId], (dErr, dRes) => {
+              if (!dErr && dRes.length > 0) {
+                const drv = dRes[0];
+                if (drv.irmIdVal && drv.irmEmpId && (drv.irmStatus === "Approved" || drv.irmStatus === "Active")) {
+                  return cb(null, {
+                    id: drv.irmIdVal,
+                    empId: drv.irmEmpId,
+                    firstNameEnglish: drv.irmFirstName || drv.irmEmpId,
+                    status: drv.irmStatus,
+                  });
+                }
+
+                const dcId = drv.distributedCenterId || 66;
+                const centerDcmSql = `
+                  SELECT id, empId, firstNameEnglish, lastNameEnglish, status
+                  FROM collection_officer.collectionofficer
+                  WHERE (distributedCenterId = ? OR UPPER(empId) LIKE 'DCM%')
+                    AND status = 'Approved'
+                    AND UPPER(empId) LIKE 'DCM%'
+                  LIMIT 1
+                `;
+                db.collectionofficer.query(centerDcmSql, [dcId], (cErr, cRes) => {
+                  if (!cErr && cRes.length > 0) {
+                    return cb(null, cRes[0]);
+                  }
+                  db.collectionofficer.query(
+                    `SELECT id, empId, firstNameEnglish, status FROM collection_officer.collectionofficer WHERE UPPER(empId) LIKE 'DCM%' AND status = 'Approved' LIMIT 1`,
+                    (aErr, aRes) => {
+                      if (!aErr && aRes.length > 0) {
+                        return cb(null, aRes[0]);
+                      }
+                      cb(new Error("No approved Distribution Centre Manager found"));
+                    }
+                  );
+                });
+              } else {
+                cb(new Error("Driver record not found"));
+              }
+            });
+          }
+        };
+
+        findOfficer((officerErr, officer) => {
+          if (officerErr || !officer) {
+            const err = officerErr || new Error("Distribution Centre Manager not found in the system");
             err.statusCode = 404;
-            return reject(err);
-          }
-
-          if (driverOrder.drvStatus === "Return Received") {
-            const err = new Error("This order has already been returned to the center and cannot proceed again!");
-            err.statusCode = 400;
-            err.currentStatus = "Return Received";
-            return reject(err);
-          }
-
-          if (driverOrder.drvStatus !== "Return") {
-            const err = new Error(`Order is not in Return status (current: ${driverOrder.drvStatus})`);
-            err.statusCode = 400;
-            err.currentStatus = driverOrder.drvStatus;
             return reject(err);
           }
 
@@ -1362,36 +1367,63 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
               expiresInSeconds: 120,
             });
           });
-        };
+        });
+      };
 
-        if (orderResults.length === 0) {
-          // Fallback check across all driverorders/processorders to detect if order exists and is already Return Received
-          let fallbackSql = `
-            SELECT do.id as driverOrderId, do.drvStatus, po.id as processOrderId, po.invNo
-            FROM collection_officer.driverorders do
-            INNER JOIN collection_officer.processorders po ON do.orderId = po.id
-            WHERE 1=1
-          `;
-          const fallbackParams = [];
-          if (invoiceNumber) {
-            fallbackSql += " AND (po.invNo = ? OR po.id = ?)";
-            fallbackParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
-          } else if (orderId) {
-            fallbackSql += " AND (po.id = ? OR do.id = ?)";
-            fallbackParams.push(orderId, orderId);
+      if (orderResults.length === 0) {
+        // Fallback check across all driverorders/processorders to detect if order exists and is already Return Received
+        let fallbackSql = `
+          SELECT do.id as driverOrderId, do.drvStatus, po.id as processOrderId, po.invNo, po.status as processStatus
+          FROM collection_officer.driverorders do
+          INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+          WHERE 1=1
+        `;
+        const fallbackParams = [];
+        if (invoiceNumber && orderId) {
+          fallbackSql += " AND (po.invNo = ? OR po.id = ? OR do.orderId = ? OR do.id = ?)";
+          fallbackParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10), orderId, orderId);
+        } else if (invoiceNumber) {
+          fallbackSql += " AND (po.invNo = ? OR po.id = ? OR do.id = ?)";
+          fallbackParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
+        } else if (orderId) {
+          fallbackSql += " AND (po.id = ? OR do.orderId = ? OR do.id = ?)";
+          fallbackParams.push(orderId, orderId, orderId);
+        }
+        fallbackSql += " ORDER BY do.id DESC LIMIT 1";
+
+        db.collectionofficer.query(fallbackSql, fallbackParams, (fErr, fRes) => {
+          if (!fErr && fRes.length > 0) {
+            return proceedWithOrder(fRes[0]);
           }
-          fallbackSql += " ORDER BY do.id DESC LIMIT 1";
 
-          db.collectionofficer.query(fallbackSql, fallbackParams, (fErr, fRes) => {
-            if (!fErr && fRes.length > 0) {
-              return proceedWithOrder(fRes[0]);
+          // Also check directly in processorders if not in driverorders
+          let directPoSql = `SELECT id as processOrderId, invNo, status as processStatus FROM collection_officer.processorders WHERE 1=1`;
+          const directParams = [];
+          if (invoiceNumber) {
+            directPoSql += " AND (invNo = ? OR id = ?)";
+            directParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
+          } else if (orderId) {
+            directPoSql += " AND id = ?";
+            directParams.push(orderId);
+          }
+          directPoSql += " LIMIT 1";
+
+          db.collectionofficer.query(directPoSql, directParams, (pErr, pRes) => {
+            if (!pErr && pRes.length > 0) {
+              const poOrder = pRes[0];
+              if (poOrder.processStatus === "Return Received") {
+                const err = new Error("This order has already been returned to the center and cannot proceed again!");
+                err.statusCode = 400;
+                err.currentStatus = "Return Received";
+                return reject(err);
+              }
             }
             return proceedWithOrder(null);
           });
-        } else {
-          proceedWithOrder(orderResults[0]);
-        }
-      });
+        });
+      } else {
+        proceedWithOrder(orderResults[0]);
+      }
     });
   });
 };
