@@ -302,4 +302,74 @@ router.post('/update-profile-image',
 router.get('/get-earnings', auth, userAuthEp.getEarnings);
 router.get('/get-earnings-history', auth, userAuthEp.getEarningsHistory);
 
+/**
+ * @openapi
+ * /api/auth/notify-status-changed:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Notify Driver Status Change
+ *     description: Triggered when admin changes driver status. Accepts userId only (auto-resolves status and empId from DB) or explicit status. Emits real-time socket event and updates in-memory cache.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               userId:
+ *                 type: integer
+ *                 description: Officer DB ID (can be sent alone)
+ *                 example: 142
+ *               empId:
+ *                 type: string
+ *                 example: "DRV0042"
+ *               status:
+ *                 type: string
+ *                 enum: ["Approved", "Rejected", "Not Approved"]
+ *                 example: "Rejected"
+ *               message:
+ *                 type: string
+ *                 example: "Your account has been rejected by administration."
+ *     responses:
+ *       200:
+ *         description: Status change emitted and cache updated successfully.
+ *       400:
+ *         description: Missing userId or empId.
+ *       404:
+ *         description: Officer not found.
+ */
+router.post('/notify-status-changed', userAuthEp.notifyStatusChanged);
+
+/**
+ * @openapi
+ * /api/auth/refresh-rejected-cache:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Refresh Rejected Officers Cache
+ *     description: Fetch all rejected officer IDs from MySQL and reload into in-memory node-cache.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Cache refreshed successfully.
+ */
+router.post('/refresh-rejected-cache', userAuthEp.refreshRejectedOfficersCache);
+
+/**
+ * @openapi
+ * /api/auth/rejected-officers-cache:
+ *   get:
+ *     tags:
+ *       - Auth
+ *     summary: Get Rejected Officers Cache
+ *     description: Retrieve all currently cached rejected officer IDs.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: List of cached rejected IDs.
+ */
+router.get('/rejected-officers-cache', userAuthEp.getRejectedOfficersCache);
+
 module.exports = router;

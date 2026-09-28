@@ -25,6 +25,7 @@ const initSocket = (httpServer) => {
         try {
           const decoded = jwt.verify(token, process.env.JWT_SECRET || "default_jwt_secret_key");
           socket.userId = decoded.id;
+          socket.empId = decoded.empId;
           socket.user = decoded;
         } catch (jwtErr) {
           console.warn("[Socket] Token verification failed:", jwtErr.message);
@@ -38,56 +39,92 @@ const initSocket = (httpServer) => {
   });
 
   io.on("connection", (socket) => {
-    console.log(`🔌 [Socket] Client connected: ${socket.id}, userId: ${socket.userId || "anonymous"}`);
+    console.log(`🔌 [Socket] Client connected: ${socket.id}, userId: ${socket.userId || "anonymous"}, empId: ${socket.empId || "none"}`);
 
     if (socket.userId) {
       socket.join(`user_${socket.userId}`);
       console.log(`👤 [Socket] Socket ${socket.id} joined room user_${socket.userId}`);
     }
+    if (socket.empId) {
+      socket.join(`user_${socket.empId}`);
+      console.log(`👤 [Socket] Socket ${socket.id} joined room user_${socket.empId}`);
+    }
 
-    socket.on("register_user", (data) => {
+    socket.on("register_user", async (data) => {
       let targetUserId = null;
+      let targetEmpId = null;
       let token = null;
 
       if (typeof data === "object" && data !== null) {
         targetUserId = data.userId;
+        targetEmpId = data.empId;
         token = data.token;
       } else {
         targetUserId = data;
       }
 
-      if (!targetUserId) return;
-
-      if (socket.userId) {
-        if (String(socket.userId) === String(targetUserId)) {
-          socket.join(`user_${targetUserId}`);
-          console.log(`👤 [Socket] Verified socket ${socket.id} joined room user_${targetUserId}`);
-        } else {
-          console.warn(`⚠️ [Socket Security] Blocked room hijacking: socket ${socket.id} (user ${socket.userId}) attempted to join user_${targetUserId}`);
-        }
-        return;
-      }
-
       if (token) {
         try {
           const decoded = jwt.verify(token, process.env.JWT_SECRET || "default_jwt_secret_key");
-          if (String(decoded.id) === String(targetUserId)) {
-            socket.userId = decoded.id;
-            socket.user = decoded;
-            socket.join(`user_${targetUserId}`);
-            console.log(`👤 [Socket] Socket ${socket.id} verified via payload token and joined room user_${targetUserId}`);
-            return;
-          } else {
-            console.warn(`⚠️ [Socket Security] Token userId (${decoded.id}) does not match target (${targetUserId})`);
-            return;
-          }
+          socket.userId = decoded.id;
+          socket.empId = decoded.empId;
+          socket.user = decoded;
         } catch (tokenErr) {
           console.warn("[Socket Security] Token verification failed on register_user:", tokenErr.message);
-          return;
         }
       }
 
-      console.warn(`⚠️ [Socket Security] Blocked unauthenticated register_user attempt for user_${targetUserId} from socket ${socket.id}`);
+      if (socket.userId) {
+        socket.join(`user_${socket.userId}`);
+      }
+      if (socket.empId) {
+        socket.join(`user_${socket.empId}`);
+      }
+      if (targetUserId && (!socket.userId || String(socket.userId) === String(targetUserId))) {
+        socket.join(`user_${targetUserId}`);
+        console.log(`👤 [Socket] Socket ${socket.id} joined room user_${targetUserId}`);
+      }
+      if (targetEmpId && (!socket.empId || String(socket.empId).toUpperCase() === String(targetEmpId).toUpperCase())) {
+        socket.join(`user_${targetEmpId}`);
+        console.log(`👤 [Socket] Socket ${socket.id} joined room user_${targetEmpId}`);
+      }
+
+      // Proactive Security: Check if user is already Rejected or Not Approved and notify immediately
+      try {
+        const userAuthDao = require("../dao/userAuth-dao");
+        const officerStatusCache = require("../services/officer-status-cache");
+        const effectiveId = socket.userId || targetUserId;
+        const effectiveEmpId = socket.empId || targetEmpId;
+
+        if (effectiveId && officerStatusCache.isRejected(effectiveId)) {
+          socket.emit("account_status_changed", {
+            status: "Rejected",
+            statusType: "rejected",
+            message: "This Employee ID is rejected",
+          });
+          return;
+        }
+
+        const officer = await userAuthDao.getOfficerDetailsDao({
+          id: effectiveId,
+          empId: effectiveEmpId,
+        });
+
+        if (officer) {
+          officerStatusCache.setOfficerStatus(officer.id, officer.status);
+          if (officer.status === "Rejected" || officer.status === "Not Approved") {
+            const payload = {
+              status: officer.status,
+              statusType: officer.status === "Rejected" ? "rejected" : "not_approved",
+              message: `This Employee ID is ${officer.status.toLowerCase()}`,
+            };
+            socket.emit("account_status_changed", payload);
+            console.log(`⛔ [Socket Security] Immediately notified rejected client ${socket.id}:`, payload);
+          }
+        }
+      } catch (checkErr) {
+        console.warn("[Socket Security] Error verifying user status on register_user:", checkErr.message);
+      }
     });
 
     // Join room for a specific load code / transfer code
@@ -169,9 +206,55 @@ const emitNotificationToUser = (userId, notification) => {
   return true;
 };
 
+/**
+ * Emit driver account status change (e.g. Banned / Rejected / Not Approved).
+ * Emits to user_${identifier} (accepts single userId/empId or array of identifiers).
+ * Consolidates rooms so Socket.io delivers only 1 event to multi-room sockets and logs once.
+ */
+const emitUserStatusChanged = (userIdentifiers, statusData = {}) => {
+  if (!io) {
+    console.warn("[Socket] IO not initialized, cannot emit account_status_changed");
+    return false;
+  }
+
+  const rawList = Array.isArray(userIdentifiers)
+    ? [...userIdentifiers]
+    : [userIdentifiers];
+
+  if (statusData.userId) rawList.push(statusData.userId);
+  if (statusData.empId) rawList.push(statusData.empId);
+
+  const rooms = [
+    ...new Set(
+      rawList
+        .filter(Boolean)
+        .map((id) => (String(id).startsWith("user_") ? String(id) : `user_${id}`))
+    ),
+  ];
+
+  if (rooms.length === 0) {
+    console.warn("[Socket] No valid target rooms for account_status_changed");
+    return false;
+  }
+
+  const payload = {
+    status: statusData.status,
+    statusType:
+      statusData.statusType ||
+      (statusData.status || "").toLowerCase().replace(/\s+/g, "_"),
+    message: statusData.message || `Your account status has changed to ${statusData.status}.`,
+    ...statusData,
+  };
+
+  io.to(rooms).emit("account_status_changed", payload);
+  console.log(`📢 [Socket] Emitted account_status_changed to ${rooms.join(", ")}:`, payload);
+  return true;
+};
+
 module.exports = {
   initSocket,
   getIO,
   emitLoadDelivered,
   emitNotificationToUser,
+  emitUserStatusChanged,
 };

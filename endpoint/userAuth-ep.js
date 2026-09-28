@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const { loginSchema, changePasswordSchema } = require("../validations/userAuth-validations");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
+const { OFFICER_STATUS } = require("../constants/officer-status");
 
 // Login User
 exports.login = asyncHandler(async (req, res) => {
@@ -42,6 +43,10 @@ exports.login = asyncHandler(async (req, res) => {
       sameSite: "Strict",
       maxAge: 8 * 60 * 60 * 1000,
     });
+
+    // Sync in-memory cache with fresh DB state for active session & socket
+    const officerStatusCache = require("../services/officer-status-cache");
+    officerStatusCache.setOfficerStatus(result.id, OFFICER_STATUS.APPROVED);
 
     // Send response with token
     return res.status(200).json({
@@ -324,3 +329,85 @@ exports.getEarningsHistory = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Notify driver of account status change over WebSocket and update cache
+// Supports passing userId only: auto-resolves officer details and latest status from database
+exports.notifyStatusChanged = asyncHandler(async (req, res) => {
+  const rawUserId = req.body.userId ?? req.body.id ?? req.body.officerId;
+  const rawEmpId = req.body.empId;
+  let status = req.body.status;
+  const customMessage = req.body.message;
+
+  if (!rawUserId && !rawEmpId) {
+    return res.status(400).json({
+      success: false,
+      message: "userId (or empId) is required",
+    });
+  }
+
+  // Look up relevant officer from DB using unified DAO method
+  const officer = await userDao.getOfficerDetailsDao({
+    id: rawUserId,
+    empId: rawEmpId,
+  });
+
+  // If user cannot be found in DB and no status was passed
+  if (!officer && !status) {
+    return res.status(404).json({
+      success: false,
+      message: `Officer with identifier '${rawUserId || rawEmpId}' not found in database`,
+    });
+  }
+
+  const resolvedUserId = rawUserId ? Number(rawUserId) : (officer ? Number(officer.id) : null);
+  const resolvedEmpId = rawEmpId || (officer ? officer.empId : null);
+  const resolvedStatus = status || (officer ? officer.status : OFFICER_STATUS.NOT_APPROVED);
+
+  // Update in-memory cache
+  const officerStatusCache = require("../services/officer-status-cache");
+  if (resolvedUserId) {
+    officerStatusCache.setOfficerStatus(resolvedUserId, resolvedStatus);
+  }
+
+  // Emit WebSocket status event using exact status words
+  const socketModule = require("../socket/socket");
+  const payload = {
+    userId: resolvedUserId,
+    empId: resolvedEmpId,
+    status: resolvedStatus,
+    message: customMessage || `Your account status has changed to ${resolvedStatus}.`,
+  };
+
+  const targetIds = [resolvedUserId, resolvedEmpId].filter(Boolean);
+  socketModule.emitUserStatusChanged(targetIds, payload);
+
+  return res.json({
+    success: true,
+    message: `Account status updated for user ${resolvedUserId || resolvedEmpId}`,
+    data: payload,
+  });
+});
+
+// Trigger refresh of rejected officers into in-memory cache
+exports.refreshRejectedOfficersCache = asyncHandler(async (req, res) => {
+  const officerStatusCache = require("../services/officer-status-cache");
+  const rejectedIds = await officerStatusCache.triggerGetRejectOfficers();
+  return res.status(200).json({
+    success: true,
+    message: "Rejected officers cache refreshed successfully",
+    count: rejectedIds.length,
+    rejectedIds,
+  });
+});
+
+// Get currently cached rejected officer IDs
+exports.getRejectedOfficersCache = asyncHandler(async (req, res) => {
+  const officerStatusCache = require("../services/officer-status-cache");
+  const rejectedIds = await officerStatusCache.getRejectedOfficerIds();
+  return res.status(200).json({
+    success: true,
+    count: rejectedIds.length,
+    rejectedIds,
+  });
+});
+

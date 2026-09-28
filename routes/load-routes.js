@@ -10,7 +10,7 @@ router.get("/get-driver-loads-count", auth, loadEp.getDriverLoadsCount);
 router.get("/get-driver-loads", auth, loadEp.getDriverLoads);
 
 // Validate QR code before summary
-router.post("/validate-qr", auth, loadEp.validateLoadQR);
+router.post("/validate-load-qr", auth, loadEp.validateLoadQR);
 
 // Scan QR and assign load to driver (updates conformDriverId)
 router.post("/scan-qr", auth, loadEp.scanAndAssignLoad);
