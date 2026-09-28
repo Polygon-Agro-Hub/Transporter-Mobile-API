@@ -9,7 +9,6 @@ const {
   admin,
 } = require("./startup/database");
 const { initSocket } = require("./socket/socket");
-
 const app = express();
 const server = http.createServer(app);
 
