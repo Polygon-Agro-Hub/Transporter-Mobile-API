@@ -194,17 +194,6 @@ const emitLoadDelivered = (transferCode, payload = {}) => {
   return true;
 };
 
-const emitNotificationToUser = (userId, notification) => {
-  if (!io) {
-    console.warn("[Socket] IO not initialized, cannot emit notification");
-    return false;
-  }
-
-  const room = `user_${userId}`;
-  io.to(room).emit("new_notification", notification);
-  console.log(`📢 [Socket] Emitted new_notification to ${room}:`, notification?.title || notification?.id);
-  return true;
-};
 
 /**
  * Emit driver account status change (e.g. Banned / Rejected / Not Approved).
@@ -255,6 +244,5 @@ module.exports = {
   initSocket,
   getIO,
   emitLoadDelivered,
-  emitNotificationToUser,
   emitUserStatusChanged,
 };
