@@ -1,6 +1,7 @@
 const db = require("../startup/database");
 const bcrypt = require("bcrypt");
 const { ROLES } = require("../constants/user-roles");
+const { OFFICER_STATUS } = require("../constants/officer-status");
 
 // Login User
 exports.loginUser = async (empId, password) => {
@@ -33,16 +34,12 @@ exports.loginUser = async (empId, password) => {
     let rejectionError = null;
 
     for (const u of results) {
-      if (u.status === "Rejected") {
+      if (u.status === OFFICER_STATUS.REJECTED) {
         rejectionError = "This Employee ID is rejected";
         continue;
       }
-      if (u.status === "Not Approved") {
+      if (u.status === OFFICER_STATUS.NOT_APPROVED || u.status !== OFFICER_STATUS.APPROVED) {
         rejectionError = "This Employee ID is not approved";
-        continue;
-      }
-      if (u.status !== "Approved") {
-        rejectionError = "Account status is pending verification";
         continue;
       }
 
@@ -387,3 +384,53 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
     throw new Error("Failed to fetch earnings history: " + err.message);
   }
 };
+
+/**
+ * Fetch all disallowed officers (Rejected, Not Approved) from database.
+ */
+exports.getDisallowedOfficersDao = async () => {
+  try {
+    const sql = `
+      SELECT id, status 
+      FROM collectionofficer 
+      WHERE status IN (?, ?)
+    `;
+    const [results] = await db.collectionofficer.promise().query(sql, [
+      OFFICER_STATUS.REJECTED,
+      OFFICER_STATUS.NOT_APPROVED,
+    ]);
+    return results;
+  } catch (err) {
+    console.error("Database error in getDisallowedOfficersDao:", err.message);
+    throw err;
+  }
+};
+
+/**
+ * Fetch officer details and status by ID or EmpId.
+ */
+exports.getOfficerDetailsDao = async ({ id, empId } = {}) => {
+  try {
+    let sql = "SELECT id, empId, status, firstNameEnglish, lastNameEnglish FROM collectionofficer WHERE ";
+    const params = [];
+
+    if (id) {
+      sql += "id = ?";
+      params.push(Number(id));
+    } else if (empId) {
+      sql += "empId = ?";
+      params.push(String(empId));
+    } else {
+      return null;
+    }
+
+    const [results] = await db.collectionofficer.promise().query(sql, params);
+    return results.length > 0 ? results[0] : null;
+  } catch (err) {
+    console.error("Database error in getOfficerDetailsDao:", err.message);
+    throw err;
+  }
+};
+
+
+
