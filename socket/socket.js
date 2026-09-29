@@ -41,14 +41,52 @@ const initSocket = (httpServer) => {
   io.on("connection", (socket) => {
     console.log(`🔌 [Socket] Client connected: ${socket.id}, userId: ${socket.userId || "anonymous"}, empId: ${socket.empId || "none"}`);
 
+    const officerStatusCache = require("../services/officer-status-cache");
+
+    // Helper to kick rejected/not approved users immediately upon socket connect or room join
+    const checkAndKickRejected = (id) => {
+      if (!id) return false;
+      const numId = Number(id);
+      if (officerStatusCache.isRejected(numId) || officerStatusCache.isNotApproved(numId)) {
+        const isRej = officerStatusCache.isRejected(numId);
+        const statusWord = isRej ? "Rejected" : "Not Approved";
+        const payload = {
+          status: statusWord,
+          accountStatus: statusWord,
+          statusType: isRej ? "rejected" : "not_approved",
+          message: `This Employee ID is ${statusWord}`,
+          timestamp: new Date().toISOString(),
+        };
+        socket.emit("officer_status_changed", payload);
+        socket.emit("account_status_changed", payload);
+        socket.emit("user_status_changed", payload);
+        console.log(`⛔ [Socket Security] Proactively kicked disallowed user ${id} on socket ${socket.id}:`, payload);
+        return true;
+      }
+      return false;
+    };
+
     if (socket.userId) {
       socket.join(`user_${socket.userId}`);
       console.log(`👤 [Socket] Socket ${socket.id} joined room user_${socket.userId}`);
+      checkAndKickRejected(socket.userId);
     }
     if (socket.empId) {
       socket.join(`user_${socket.empId}`);
       console.log(`👤 [Socket] Socket ${socket.id} joined room user_${socket.empId}`);
     }
+
+    socket.on("join_user", (userId) => {
+      socket.join(`user_${userId}`);
+      console.log(`👤 [Socket] Socket ${socket.id} joined room user_${userId}`);
+      checkAndKickRejected(userId);
+    });
+
+    socket.on("join_officer", (officerId) => {
+      socket.join(`user_${officerId}`);
+      console.log(`👤 [Socket] Socket ${socket.id} joined room user_${officerId}`);
+      checkAndKickRejected(officerId);
+    });
 
     socket.on("register_user", async (data) => {
       let targetUserId = null;
