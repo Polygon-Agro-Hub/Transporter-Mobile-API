@@ -1,9 +1,38 @@
 const returnDao = require("../dao/return-dao");
 const asyncHandler = require("express-async-handler");
+const axios = require("axios");
 const {
   submitReturnSchema,
   updateReturnReceivedSchema,
 } = require("../validations/return-validation");
+
+/**
+ * Notify Collector/Distribution Mobile API over HTTP webhook so it pushes
+ * real-time Socket.IO notifications to the DCM's device instantly (Zero polling).
+ */
+const notifyCollectorReturnOtp = async (result) => {
+  if (!result || !result.otpCode) return;
+  try {
+    const collectorBase = (process.env.COLLECTOR_API_URL || "http://localhost:3000/agro-api/collection-api").replace(/\/+$/, "");
+    await axios.post(
+      `${collectorBase}/api/distribution-manager/notify-return-otp`,
+      {
+        id: result.otpId,
+        officerId: result.officerId,
+        dcmEmpId: result.dcmEmpId,
+        invNo: result.invoiceNumber,
+        otpCode: String(result.otpCode),
+        createdAt: new Date().toISOString(),
+        isRead: 0,
+      },
+      { timeout: 5000 }
+    );
+    console.log(`📢 [Return OTP] Real-time socket notification triggered on Collector API for DCM ${result.dcmEmpId} (OTP: ${result.otpCode})`);
+  } catch (err) {
+    console.warn("Could not notify Collector API of return OTP:", err.message);
+  }
+};
+
 
 // Get All Return Reasons
 exports.getReason = asyncHandler(async (req, res) => {
@@ -227,6 +256,9 @@ exports.scanDcmGenerateOtp = asyncHandler(async (req, res) => {
       driverId,
     });
 
+    // Notify Collector API via webhook so it pushes socket event to DCM instantly
+    notifyCollectorReturnOtp(result).catch(() => {});
+
     return res.status(200).json({
       status: "success",
       message: "OTP generated successfully",
@@ -263,6 +295,9 @@ exports.resendReturnOtp = asyncHandler(async (req, res) => {
       orderId,
       invoiceNumber,
     });
+
+    // Notify Collector API via webhook so it pushes socket event to DCM instantly
+    notifyCollectorReturnOtp(result).catch(() => {});
 
     return res.status(200).json({
       status: "success",
