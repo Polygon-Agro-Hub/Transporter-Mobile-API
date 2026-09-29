@@ -91,16 +91,20 @@ app.use((err, req, res, next) => {
   res.status(500).send("Something broke!!");
 });
 
-// Start the server
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🔌 Socket.IO initialized`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`📍 Base Path: ${BASE_PATH}`);
-  console.log(`💓 Health Check URL: ${BASE_PATH}/health`);
-});
+// Attach Socket.io and Express app to the HTTP server instance
+server.io = io;
+server.app = app;
 
-app.server = server;
-app.io = io;
-module.exports = app;
+// Only listen locally, Vercel will export the handler and call listen internally
+const PORT = process.env.PORT || 3000;
+if (!process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🔌 Socket.IO initialized`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+    console.log(`📍 Base Path: ${BASE_PATH}`);
+    console.log(`💓 Health Check URL: ${BASE_PATH}/health`);
+  });
+}
+
+module.exports = server;
