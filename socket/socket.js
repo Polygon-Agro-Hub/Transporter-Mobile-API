@@ -236,7 +236,19 @@ const emitUserStatusChanged = (userIdentifiers, statusData = {}) => {
   };
 
   io.to(rooms).emit("account_status_changed", payload);
+  io.to(rooms).emit("officer_status_changed", payload);
+  io.to(rooms).emit("user_status_changed", payload);
   console.log(`📢 [Socket] Emitted account_status_changed to ${rooms.join(", ")}:`, payload);
+
+  // If rejected, forcibly disconnect socket connection from server side
+  if (statusData.status === "Rejected") {
+    setTimeout(() => {
+      rooms.forEach((room) => {
+        io.in(room).disconnectSockets(true);
+        console.log(`[Socket] Forcibly disconnected sockets in ${room}`);
+      });
+    }, 1200);
+  }
   return true;
 };
 
