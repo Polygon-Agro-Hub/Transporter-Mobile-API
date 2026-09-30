@@ -13,7 +13,7 @@ const {
 const notifyCollectorReturnOtp = async (result) => {
   if (!result || !result.otpCode) return;
   try {
-    const collectorBase = (process.env.COLLECTOR_API_URL || "http://localhost:3000/agro-api/collection-api").replace(/\/+$/, "");
+    const collectorBase = (process.env.COLLECTOR_API_URL || "https://collector-api.polygonagro.com/agro-api/collection-api").replace(/\/+$/, "");
     await axios.post(
       `${collectorBase}/api/distribution-manager/notify-return-otp`,
       {
@@ -257,7 +257,7 @@ exports.scanDcmGenerateOtp = asyncHandler(async (req, res) => {
     });
 
     // Notify Collector API via webhook so it pushes socket event to DCM instantly
-    notifyCollectorReturnOtp(result).catch(() => {});
+    await notifyCollectorReturnOtp(result);
 
     return res.status(200).json({
       status: "success",
@@ -297,7 +297,7 @@ exports.resendReturnOtp = asyncHandler(async (req, res) => {
     });
 
     // Notify Collector API via webhook so it pushes socket event to DCM instantly
-    notifyCollectorReturnOtp(result).catch(() => {});
+    await notifyCollectorReturnOtp(result);
 
     return res.status(200).json({
       status: "success",
