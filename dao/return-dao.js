@@ -1,6 +1,7 @@
 const db = require("../startup/database");
 const { HANDLING_FEE_CONSTANTS } = require("../constants/handling-fee");
 const axios = require("axios");
+const returnOtpCache = require("../services/return-otp-cache");
 
 // Get All Return Reasons
 exports.getReason = async () => {
@@ -1355,7 +1356,7 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
 
             console.log(`🔑 [Return Order OTP] Order: ${driverOrder.invNo}, drvOrderId: ${driverOrder.driverOrderId}, Officer: ${officer.empId}, OTP: ${otpCode}`);
 
-            resolve({
+            const otpPayload = {
               drvOrderId: driverOrder.driverOrderId,
               processOrderId: driverOrder.processOrderId,
               invoiceNumber: driverOrder.invNo,
@@ -1365,7 +1366,11 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
               otpId: insertResult.insertId,
               otpCode: otpCode,
               expiresInSeconds: 120,
-            });
+            };
+
+            returnOtpCache.setReturnOtp(otpPayload, 120);
+
+            resolve(otpPayload);
           });
         });
       };
@@ -1504,14 +1509,19 @@ exports.resendReturnOtp = async ({ drvOrderId, dcmEmpId, driverId, orderId, invo
 
           console.log(`🔄 [Resend Return OTP] Order: ${driverOrder.invNo}, drvOrderId: ${driverOrder.driverOrderId}, Officer: ${officerEmpId}, OTP: ${otpCode}`);
 
-          resolve({
+          const otpPayload = {
             drvOrderId: driverOrder.driverOrderId,
             invoiceNumber: driverOrder.invNo,
             dcmEmpId: officerEmpId,
+            officerId: officerId,
             otpId: insRes.insertId,
             otpCode: otpCode,
             expiresInSeconds: 120,
-          });
+          };
+
+          returnOtpCache.setReturnOtp(otpPayload, 120);
+
+          resolve(otpPayload);
         });
       });
     });
@@ -1568,6 +1578,73 @@ exports.verifyOtpReturnReceived = async ({ drvOrderId, orderId, invoiceNumber, o
         return reject(err);
       }
 
+      const executeStatusUpdate = () => {
+        const updateDriverSql = `
+          UPDATE collection_officer.driverorders
+          SET drvStatus = 'Return Received', receivedTime = NOW()
+          WHERE id = ?
+        `;
+
+        db.collectionofficer.query(updateDriverSql, [driverOrder.driverOrderId], (updateDriverErr) => {
+          if (updateDriverErr) {
+            console.error("Database error updating driver order to Return Received:", updateDriverErr.message);
+            return reject(new Error("Failed to update return order"));
+          }
+
+          const updateProcessSql = `
+            UPDATE collection_officer.processorders
+            SET status = 'Return Received'
+            WHERE id = ?
+          `;
+
+          db.collectionofficer.query(updateProcessSql, [driverOrder.processOrderId], (updateProcessErr) => {
+            if (updateProcessErr) {
+              console.error("Database error updating process order:", updateProcessErr.message);
+            }
+
+            // Invalidate OTP in node-cache
+            returnOtpCache.invalidateReturnOtp({
+              drvOrderId: driverOrder.driverOrderId,
+              invoiceNumber: driverOrder.invNo,
+            });
+
+            resolve({
+              success: true,
+              drvOrderId: driverOrder.driverOrderId,
+              processOrderId: driverOrder.processOrderId,
+              invoiceNumber: driverOrder.invNo,
+              message: `Order : ${driverOrder.invNo} has been successfully returned to the centre.`,
+            });
+          });
+        });
+      };
+
+      // 1. Check in-memory node-cache first (0 DB queries)
+      const cachedOtp = returnOtpCache.getReturnOtp({
+        drvOrderId: driverOrder.driverOrderId,
+        invoiceNumber: driverOrder.invNo,
+      });
+
+      if (cachedOtp) {
+        if (cachedOtp.expiresAt && Date.now() > cachedOtp.expiresAt) {
+          const err = new Error("The OTP has expired. Please request a new one.");
+          err.statusCode = 400;
+          err.errorType = "EXPIRED";
+          return reject(err);
+        }
+
+        if (Number(otpCode) !== Number(cachedOtp.otpCode)) {
+          const err = new Error("The OTP is incorrect. Please check and try again.");
+          err.statusCode = 400;
+          err.errorType = "INCORRECT";
+          return reject(err);
+        }
+
+        console.log(`⚡ [Return OTP Cache] In-memory verification successful for order ${driverOrder.invNo}`);
+        return executeStatusUpdate();
+      }
+
+      // 2. Cache miss: fallback to database
       const otpSql = `
         SELECT 
           id,
@@ -1611,38 +1688,7 @@ exports.verifyOtpReturnReceived = async ({ drvOrderId, orderId, invoiceNumber, o
           return reject(err);
         }
 
-        const updateDriverSql = `
-          UPDATE collection_officer.driverorders
-          SET drvStatus = 'Return Received', receivedTime = NOW()
-          WHERE id = ?
-        `;
-
-        db.collectionofficer.query(updateDriverSql, [driverOrder.driverOrderId], (updateDriverErr) => {
-          if (updateDriverErr) {
-            console.error("Database error updating driver order to Return Received:", updateDriverErr.message);
-            return reject(new Error("Failed to update return order"));
-          }
-
-          const updateProcessSql = `
-            UPDATE collection_officer.processorders
-            SET status = 'Return Received'
-            WHERE id = ?
-          `;
-
-          db.collectionofficer.query(updateProcessSql, [driverOrder.processOrderId], (updateProcessErr) => {
-            if (updateProcessErr) {
-              console.error("Database error updating process order:", updateProcessErr.message);
-            }
-
-            resolve({
-              success: true,
-              drvOrderId: driverOrder.driverOrderId,
-              processOrderId: driverOrder.processOrderId,
-              invoiceNumber: driverOrder.invNo,
-              message: `Order : ${driverOrder.invNo} has been successfully returned to the centre.`,
-            });
-          });
-        });
+        executeStatusUpdate();
       });
     });
   });
