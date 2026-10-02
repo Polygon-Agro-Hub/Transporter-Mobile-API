@@ -87,8 +87,20 @@ app.use(`${BASE_PATH}`, healthroute);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
+  if (
+    err.name === "MulterError" ||
+    (err.message && err.message.includes("supported"))
+  ) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message,
+    });
+  }
   console.error(err.stack);
-  res.status(500).send("Something broke!!");
+  res.status(500).json({
+    status: "error",
+    message: err.message || "Internal server error",
+  });
 });
 
 // Attach Socket.io and Express app to the HTTP server instance

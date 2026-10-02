@@ -709,9 +709,14 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                           `SELECT rsnEnglish FROM collection_officer.returnreason WHERE id = ? LIMIT 1`,
                                           [returnReasonId],
                                           (errRsn, rsnRows) => {
-                                            const reasonText = (rsnRows && rsnRows.length > 0)
+                                            const dbReason = (rsnRows && rsnRows.length > 0)
                                               ? rsnRows[0].rsnEnglish
-                                              : (note || 'Returned');
+                                              : null;
+                                            const isOther = dbReason && dbReason.trim().toLowerCase() === "other";
+                                            const customReason = (note && typeof note === "string") ? note.trim() : "";
+                                            const reasonText = (isOther && customReason)
+                                              ? customReason
+                                              : (dbReason || customReason || "Returned");
                                             const returnedNotifValues = invoiceResult.map((row) => [
                                               row.id,
                                               'Order Returned',
@@ -983,7 +988,10 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
         // Determine return reason text (use the latest one)
         let returnReasonText = "";
-        if (row.returnReasonEnglish) {
+        const isOther = (row.returnReasonEnglish || "").toLowerCase() === "other";
+        if (isOther && row.returnNote && row.returnNote.trim()) {
+          returnReasonText = row.returnNote.trim();
+        } else if (row.returnReasonEnglish) {
           returnReasonText = row.returnReasonEnglish;
         } else if (row.returnNote) {
           returnReasonText = row.returnNote;
