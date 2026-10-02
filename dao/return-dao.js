@@ -2,6 +2,8 @@ const db = require("../startup/database");
 const { HANDLING_FEE_CONSTANTS } = require("../constants/handling-fee");
 const axios = require("axios");
 const returnOtpCache = require("../services/return-otp-cache");
+const polygonNotificationService = require("../services/polygon-notification-service");
+const salesdashNotificationService = require("../services/salesdash-notification-service");
 
 // Get All Return Reasons
 exports.getReason = async () => {
@@ -733,6 +735,12 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                                 }
                                               },
                                             );
+
+                                            // Trigger Polygon mobile application real-time socket & push notification
+                                            invoiceResult.forEach((row) => {
+                                              polygonNotificationService.notifyOrderReturned(row.id, row.invNo, reasonText).catch(() => {});
+                                               salesdashNotificationService.notifySalesDashOrderReturned(row.id, row.invNo, reasonText).catch(() => {});
+                                            });
 
                                             // Send SMS to customer for each returned order (fire-and-forget)
                                             const SHOUTOUT_API_URL = process.env.SHOUTOUT_API_URL || "https://api.getshoutout.com/coreservice/messages";
