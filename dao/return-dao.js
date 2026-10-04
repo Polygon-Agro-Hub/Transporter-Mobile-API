@@ -768,7 +768,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                                 const smsMessage = `Your order ${row.invNo} has been returned by the driver.\nReason: ${reasonText}`;
 
                                                 const body = {
-                                                  source: "PolygonAgro",
+                                                  source: "Polygon",
                                                   transport: "sms",
                                                   transports: ["sms"],
                                                   content: {
