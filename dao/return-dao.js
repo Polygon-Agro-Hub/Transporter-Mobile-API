@@ -743,7 +743,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                             });
 
                                             // Send SMS to customer for each returned order (fire-and-forget)
-                                            const SHOUTOUT_API_URL = process.env.SHOUTOUT_API_URL || "https://api.getshoutout.com/coreservice/messages";
+                                            const SHOUTOUT_API_URL = "https://api.getshoutout.com/coreservice/messages";
                                             const apiKey = process.env.SHOUTOUT_API_KEY;
                                             const smsHeaders = {
                                               "Content-Type": "application/json",
