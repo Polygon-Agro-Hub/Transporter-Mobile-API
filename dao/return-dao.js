@@ -2,6 +2,8 @@ const db = require("../startup/database");
 const { HANDLING_FEE_CONSTANTS } = require("../constants/handling-fee");
 const axios = require("axios");
 const returnOtpCache = require("../services/return-otp-cache");
+const polygonNotificationService = require("../services/polygon-notification-service");
+const salesdashNotificationService = require("../services/salesdash-notification-service");
 
 // Get All Return Reasons
 exports.getReason = async () => {
@@ -709,9 +711,14 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                           `SELECT rsnEnglish FROM collection_officer.returnreason WHERE id = ? LIMIT 1`,
                                           [returnReasonId],
                                           (errRsn, rsnRows) => {
-                                            const reasonText = (rsnRows && rsnRows.length > 0)
+                                            const dbReason = (rsnRows && rsnRows.length > 0)
                                               ? rsnRows[0].rsnEnglish
-                                              : (note || 'Returned');
+                                              : null;
+                                            const isOther = dbReason && dbReason.trim().toLowerCase() === "other";
+                                            const customReason = (note && typeof note === "string") ? note.trim() : "";
+                                            const reasonText = (isOther && customReason)
+                                              ? customReason
+                                              : (dbReason || customReason || "Returned");
                                             const returnedNotifValues = invoiceResult.map((row) => [
                                               row.id,
                                               'Order Returned',
@@ -729,8 +736,14 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                               },
                                             );
 
+                                            // Trigger Polygon mobile application real-time socket & push notification
+                                            invoiceResult.forEach((row) => {
+                                              polygonNotificationService.notifyOrderReturned(row.id, row.invNo, reasonText).catch(() => { });
+                                              salesdashNotificationService.notifySalesDashOrderReturned(row.id, row.invNo, reasonText).catch(() => { });
+                                            });
+
                                             // Send SMS to customer for each returned order (fire-and-forget)
-                                            const SHOUTOUT_API_URL = process.env.SHOUTOUT_API_URL || "https://api.getshoutout.com/coreservice/messages";
+                                            const SHOUTOUT_API_URL = "https://api.getshoutout.com/coreservice/messages";
                                             const apiKey = process.env.SHOUTOUT_API_KEY;
                                             const smsHeaders = {
                                               "Content-Type": "application/json",
@@ -755,7 +768,7 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                                 const smsMessage = `Your order ${row.invNo} has been returned by the driver.\nReason: ${reasonText}`;
 
                                                 const body = {
-                                                  source: "PolygonAgro",
+                                                  source: "Polygon",
                                                   transport: "sms",
                                                   transports: ["sms"],
                                                   content: {
@@ -983,7 +996,10 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
 
         // Determine return reason text (use the latest one)
         let returnReasonText = "";
-        if (row.returnReasonEnglish) {
+        const isOther = (row.returnReasonEnglish || "").toLowerCase() === "other";
+        if (isOther && row.returnNote && row.returnNote.trim()) {
+          returnReasonText = row.returnNote.trim();
+        } else if (row.returnReasonEnglish) {
           returnReasonText = row.returnReasonEnglish;
         } else if (row.returnNote) {
           returnReasonText = row.returnNote;
@@ -1200,9 +1216,15 @@ exports.updateReturnReceived = async ({ invoiceNumbers, driverId }) => {
 /**
  * Scan DCM QR and create 5-digit OTP with 2-minute expiration
  */
+
 exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, driverId }) => {
   return new Promise((resolve, reject) => {
-    // 1. First locate the return order
+    const numericInvoice =
+      invoiceNumber !== undefined && invoiceNumber !== null && !isNaN(invoiceNumber)
+        ? parseInt(invoiceNumber, 10)
+        : -1;
+
+    // 1. Locate the return order for this driver
     let orderSql = `
       SELECT 
         do.id as driverOrderId,
@@ -1219,10 +1241,10 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
 
     if (invoiceNumber && orderId) {
       orderSql += " AND (po.invNo = ? OR po.id = ? OR do.orderId = ? OR do.id = ?)";
-      orderParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10), orderId, orderId);
+      orderParams.push(String(invoiceNumber), numericInvoice, orderId, orderId);
     } else if (invoiceNumber) {
       orderSql += " AND (po.invNo = ? OR po.id = ? OR do.id = ?)";
-      orderParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
+      orderParams.push(String(invoiceNumber), numericInvoice, numericInvoice);
     } else if (orderId) {
       orderSql += " AND (po.id = ? OR do.orderId = ? OR do.id = ?)";
       orderParams.push(orderId, orderId, orderId);
@@ -1249,95 +1271,153 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
           String(driverOrder.processStatus || "").toLowerCase().includes("return received");
 
         if (isReturnReceived) {
-          const err = new Error("This order has already been returned to the center and cannot proceed again!");
+          const err = new Error(
+            "This order has already been returned to the center and cannot proceed again!"
+          );
           err.statusCode = 400;
           err.currentStatus = "Return Received";
           return reject(err);
         }
 
         if (driverOrder.drvStatus !== "Return") {
-          const err = new Error(`Order is not in Return status (current: ${driverOrder.drvStatus})`);
+          const err = new Error(
+            `Order is not in Return status (current: ${driverOrder.drvStatus})`
+          );
           err.statusCode = 400;
           err.currentStatus = driverOrder.drvStatus;
           return reject(err);
         }
 
-        // 2. Find officer to issue OTP
+        // If no DCM was scanned, the scanned invoice must be THIS order's invoice
+        const scannedDcm = String(dcmEmpId || "").trim().toUpperCase();
+        if (!scannedDcm.startsWith("DCM")) {
+          const norm = (v) => String(v || "").replace(/[#\s_-]/g, "").toUpperCase();
+          if (!invoiceNumber || norm(driverOrder.invNo) !== norm(invoiceNumber)) {
+            const err = new Error("Invalid QR. This QR does not belong to this order.");
+            err.statusCode = 400;
+            err.errorType = "INVALID_QR";
+            return reject(err);
+          }
+        }
+
+        // 2. Find the officer who will receive the OTP
         const findOfficer = (cb) => {
           const upperEmpId = String(dcmEmpId || "").trim().toUpperCase();
+
+          // ---- A DCM QR was scanned: validate strictly, NO fallback ----
           if (upperEmpId.startsWith("DCM")) {
             const officerSql = `
-              SELECT id, empId, firstNameEnglish, lastNameEnglish, status, distributedCenterId
-              FROM collection_officer.collectionofficer
-              WHERE (empId = ? OR empId = ?)
+              SELECT dcm.id, dcm.empId, dcm.firstNameEnglish, dcm.lastNameEnglish,
+                     dcm.status, dcm.distributedCenterId AS dcmCenterId,
+                     drv.distributedCenterId AS driverCenterId
+              FROM collection_officer.collectionofficer dcm
+              LEFT JOIN collection_officer.collectionofficer drv ON drv.id = ?
+              WHERE UPPER(dcm.empId) = ?
               LIMIT 1
             `;
-            db.collectionofficer.query(officerSql, [dcmEmpId, upperEmpId], (err, res) => {
-              if (!err && res.length > 0 && res[0].status === "Approved") {
-                return cb(null, res[0]);
-              }
-              fallbackOfficer();
-            });
-          } else {
-            fallbackOfficer();
-          }
 
-          function fallbackOfficer() {
-            const driverSql = `
-              SELECT d.irmId, d.distributedCenterId,
-                     irm.id as irmIdVal, irm.empId as irmEmpId, irm.firstNameEnglish as irmFirstName,
-                     irm.status as irmStatus
-              FROM collection_officer.collectionofficer d
-              LEFT JOIN collection_officer.collectionofficer irm ON d.irmId = irm.id
-              WHERE d.id = ?
-              LIMIT 1
-            `;
-            db.collectionofficer.query(driverSql, [driverId], (dErr, dRes) => {
-              if (!dErr && dRes.length > 0) {
-                const drv = dRes[0];
-                if (drv.irmIdVal && drv.irmEmpId && (drv.irmStatus === "Approved" || drv.irmStatus === "Active")) {
-                  return cb(null, {
-                    id: drv.irmIdVal,
-                    empId: drv.irmEmpId,
-                    firstNameEnglish: drv.irmFirstName || drv.irmEmpId,
-                    status: drv.irmStatus,
-                  });
+            return db.collectionofficer.query(
+              officerSql,
+              [driverId, upperEmpId],
+              (err, rows) => {
+                if (err) {
+                  console.error("Database error verifying DCM:", err.message);
+                  return cb(new Error("Failed to verify Distribution Centre Manager"));
                 }
 
-                const dcId = drv.distributedCenterId || 66;
-                const centerDcmSql = `
-                  SELECT id, empId, firstNameEnglish, lastNameEnglish, status
-                  FROM collection_officer.collectionofficer
-                  WHERE (distributedCenterId = ? OR UPPER(empId) LIKE 'DCM%')
-                    AND status = 'Approved'
-                    AND UPPER(empId) LIKE 'DCM%'
-                  LIMIT 1
-                `;
-                db.collectionofficer.query(centerDcmSql, [dcId], (cErr, cRes) => {
-                  if (!cErr && cRes.length > 0) {
-                    return cb(null, cRes[0]);
-                  }
-                  db.collectionofficer.query(
-                    `SELECT id, empId, firstNameEnglish, status FROM collection_officer.collectionofficer WHERE UPPER(empId) LIKE 'DCM%' AND status = 'Approved' LIMIT 1`,
-                    (aErr, aRes) => {
-                      if (!aErr && aRes.length > 0) {
-                        return cb(null, aRes[0]);
-                      }
-                      cb(new Error("No approved Distribution Centre Manager found"));
-                    }
+                if (!rows || rows.length === 0) {
+                  const e = new Error("Distribution Centre Manager not found");
+                  e.statusCode = 404;
+                  e.errorType = "DCM_NOT_FOUND";
+                  return cb(e);
+                }
+
+                const dcm = rows[0];
+
+                if (dcm.status !== "Approved") {
+                  const e = new Error("This Distribution Centre Manager is not active");
+                  e.statusCode = 400;
+                  e.errorType = "DCM_NOT_ACTIVE";
+                  return cb(e);
+                }
+
+                // Driver and DCM must belong to the SAME distribution center
+                if (
+                  dcm.driverCenterId == null ||
+                  dcm.dcmCenterId == null ||
+                  Number(dcm.driverCenterId) !== Number(dcm.dcmCenterId)
+                ) {
+                  const e = new Error(
+                    "This Distribution Centre Manager does not belong to your distribution center."
                   );
-                });
-              } else {
-                cb(new Error("Driver record not found"));
+                  e.statusCode = 400;
+                  e.errorType = "CENTER_MISMATCH";
+                  return cb(e);
+                }
+
+                return cb(null, dcm);
               }
-            });
+            );
           }
+
+          // ---- Order (invoice) QR scanned: OTP goes ONLY to an Approved DCM of the SAME center ----
+          // (IRM / DIO / any non-DCM officer is never used.)
+          const driverSql = `
+            SELECT distributedCenterId
+            FROM collection_officer.collectionofficer
+            WHERE id = ?
+            LIMIT 1
+          `;
+
+          db.collectionofficer.query(driverSql, [driverId], (dErr, dRes) => {
+            if (dErr || !dRes || dRes.length === 0) {
+              return cb(new Error("Driver record not found"));
+            }
+
+            const driverCenterId = dRes[0].distributedCenterId;
+            if (!driverCenterId) {
+              const e = new Error("Driver has no distribution center assigned");
+              e.statusCode = 400;
+              e.errorType = "DRIVER_NO_CENTER";
+              return cb(e);
+            }
+
+            const centerDcmSql = `
+              SELECT id, empId, firstNameEnglish, lastNameEnglish, status
+              FROM collection_officer.collectionofficer
+              WHERE distributedCenterId = ?
+                AND status = 'Approved'
+                AND UPPER(empId) LIKE 'DCM%'
+              ORDER BY id ASC
+              LIMIT 1
+            `;
+            db.collectionofficer.query(centerDcmSql, [driverCenterId], (cErr, cRes) => {
+              if (!cErr && cRes && cRes.length > 0) {
+                return cb(null, cRes[0]);
+              }
+              const e = new Error(
+                "No approved Distribution Centre Manager found for your center"
+              );
+              e.statusCode = 404;
+              return cb(e);
+            });
+          });
         };
 
         findOfficer((officerErr, officer) => {
           if (officerErr || !officer) {
-            const err = officerErr || new Error("Distribution Centre Manager not found in the system");
-            err.statusCode = 404;
+            const err =
+              officerErr ||
+              new Error("Distribution Centre Manager not found in the system");
+            err.statusCode = err.statusCode || 404;
+            return reject(err);
+          }
+
+          // Safety net: OTP may only ever be issued to a DCM
+          if (!String(officer.empId || "").toUpperCase().startsWith("DCM")) {
+            const err = new Error("OTP can only be sent to a Distribution Centre Manager");
+            err.statusCode = 400;
+            err.errorType = "DCM_ONLY";
             return reject(err);
           }
 
@@ -1348,35 +1428,45 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
             VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 2 MINUTE), NOW())
           `;
 
-          db.collectionofficer.query(insertSql, [driverOrder.driverOrderId, officer.id, otpCode], (insertErr, insertResult) => {
-            if (insertErr) {
-              console.error("Database error inserting handover return OTP:", insertErr.message);
-              return reject(new Error("Failed to generate OTP"));
+          db.collectionofficer.query(
+            insertSql,
+            [driverOrder.driverOrderId, officer.id, otpCode],
+            (insertErr, insertResult) => {
+              if (insertErr) {
+                console.error(
+                  "Database error inserting handover return OTP:",
+                  insertErr.message
+                );
+                return reject(new Error("Failed to generate OTP"));
+              }
+
+              // OTP value intentionally NOT logged
+              console.log(
+                `[Return Order OTP] Order: ${driverOrder.invNo}, drvOrderId: ${driverOrder.driverOrderId}, Officer: ${officer.empId}`
+              );
+
+              const otpPayload = {
+                drvOrderId: driverOrder.driverOrderId,
+                processOrderId: driverOrder.processOrderId,
+                invoiceNumber: driverOrder.invNo,
+                dcmEmpId: officer.empId,
+                officerId: officer.id,
+                officerName: officer.firstNameEnglish || officer.empId,
+                otpId: insertResult.insertId,
+                otpCode: otpCode,
+                expiresInSeconds: 120,
+              };
+
+              returnOtpCache.setReturnOtp(otpPayload, 120);
+
+              resolve(otpPayload);
             }
-
-            console.log(`🔑 [Return Order OTP] Order: ${driverOrder.invNo}, drvOrderId: ${driverOrder.driverOrderId}, Officer: ${officer.empId}, OTP: ${otpCode}`);
-
-            const otpPayload = {
-              drvOrderId: driverOrder.driverOrderId,
-              processOrderId: driverOrder.processOrderId,
-              invoiceNumber: driverOrder.invNo,
-              dcmEmpId: officer.empId,
-              officerId: officer.id,
-              officerName: officer.firstNameEnglish || officer.empId,
-              otpId: insertResult.insertId,
-              otpCode: otpCode,
-              expiresInSeconds: 120,
-            };
-
-            returnOtpCache.setReturnOtp(otpPayload, 120);
-
-            resolve(otpPayload);
-          });
+          );
         });
       };
 
       if (orderResults.length === 0) {
-        // Fallback check across all driverorders/processorders to detect if order exists and is already Return Received
+        // Fallback: detect if the order exists elsewhere and is already Return Received
         let fallbackSql = `
           SELECT do.id as driverOrderId, do.drvStatus, po.id as processOrderId, po.invNo, po.status as processStatus
           FROM collection_officer.driverorders do
@@ -1386,10 +1476,10 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
         const fallbackParams = [];
         if (invoiceNumber && orderId) {
           fallbackSql += " AND (po.invNo = ? OR po.id = ? OR do.orderId = ? OR do.id = ?)";
-          fallbackParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10), orderId, orderId);
+          fallbackParams.push(String(invoiceNumber), numericInvoice, orderId, orderId);
         } else if (invoiceNumber) {
           fallbackSql += " AND (po.invNo = ? OR po.id = ? OR do.id = ?)";
-          fallbackParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
+          fallbackParams.push(String(invoiceNumber), numericInvoice, numericInvoice);
         } else if (orderId) {
           fallbackSql += " AND (po.id = ? OR do.orderId = ? OR do.id = ?)";
           fallbackParams.push(orderId, orderId, orderId);
@@ -1401,12 +1491,11 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
             return proceedWithOrder(fRes[0]);
           }
 
-          // Also check directly in processorders if not in driverorders
           let directPoSql = `SELECT id as processOrderId, invNo, status as processStatus FROM collection_officer.processorders WHERE 1=1`;
           const directParams = [];
           if (invoiceNumber) {
             directPoSql += " AND (invNo = ? OR id = ?)";
-            directParams.push(String(invoiceNumber), isNaN(invoiceNumber) ? -1 : parseInt(invoiceNumber, 10));
+            directParams.push(String(invoiceNumber), numericInvoice);
           } else if (orderId) {
             directPoSql += " AND id = ?";
             directParams.push(orderId);
@@ -1417,7 +1506,9 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
             if (!pErr && pRes.length > 0) {
               const poOrder = pRes[0];
               if (poOrder.processStatus === "Return Received") {
-                const err = new Error("This order has already been returned to the center and cannot proceed again!");
+                const err = new Error(
+                  "This order has already been returned to the center and cannot proceed again!"
+                );
                 err.statusCode = 400;
                 err.currentStatus = "Return Received";
                 return reject(err);
