@@ -14,8 +14,8 @@ const notifyCollectorReturnOtp = async (result) => {
   if (!result || !result.otpCode) return;
   try {
     const collectorBase = (process.env.COLLECTOR_API_URL || "https://collector-api.polygonagro.com/agro-api/collection-api").replace(/\/+$/, "");
-    const triggerSecret =
-      process.env.CODINET_TRIGGER_SECRET || "codi_sec_trg_192tk596ikg90e9kf9t6b21";
+    const { CODINET_TRIGGER_SECRET } = require("../constants/notification-secrets");
+    const triggerSecret = CODINET_TRIGGER_SECRET;
 
     await axios.post(
       `${collectorBase}/api/distribution-manager/notify-return-otp`,
