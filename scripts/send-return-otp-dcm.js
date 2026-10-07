@@ -121,10 +121,20 @@ async function run() {
       isRead: 0,
     };
 
+    const triggerSecret =
+      process.env.CODINET_TRIGGER_SECRET || "codi_sec_trg_192tk596ikg90e9kf9t6b21";
+
     const response = await axios.post(
       `${collectorBase}/api/distribution-manager/notify-return-otp`,
       webhookPayload,
-      { timeout: 8000 }
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-service-token": triggerSecret,
+          Authorization: `Bearer ${triggerSecret}`,
+        },
+        timeout: 8000,
+      }
     );
 
     console.log(`\n✅ Codi Net Collector API Response (${response.status} ${response.statusText}):`);
