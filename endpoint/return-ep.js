@@ -14,6 +14,9 @@ const notifyCollectorReturnOtp = async (result) => {
   if (!result || !result.otpCode) return;
   try {
     const collectorBase = (process.env.COLLECTOR_API_URL || "https://collector-api.polygonagro.com/agro-api/collection-api").replace(/\/+$/, "");
+    const { CODINET_TRIGGER_SECRET } = require("../constants/notification-secrets");
+    const triggerSecret = CODINET_TRIGGER_SECRET;
+
     await axios.post(
       `${collectorBase}/api/distribution-manager/notify-return-otp`,
       {
@@ -25,7 +28,14 @@ const notifyCollectorReturnOtp = async (result) => {
         createdAt: new Date().toISOString(),
         isRead: 0,
       },
-      { timeout: 5000 }
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-service-token": triggerSecret,
+          Authorization: `Bearer ${triggerSecret}`,
+        },
+        timeout: 5000,
+      }
     );
     console.log(`📢 [Return OTP] Real-time socket notification triggered on Collector API for DCM ${result.dcmEmpId} (OTP: ${result.otpCode})`);
   } catch (err) {

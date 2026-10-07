@@ -11,13 +11,16 @@ const getPolygonBaseUrl = () => {
   return url.replace(/\/+$/, "");
 };
 
+const { POLYGON_TRIGGER_SECRET } = require("../constants/notification-secrets");
+
 const getServiceHeaders = () => {
-  const secret = process.env.POLYGON_TRIGGER_SECRET;
+  const secret = POLYGON_TRIGGER_SECRET;
   const headers = {
     "Content-Type": "application/json",
   };
   if (secret) {
     headers["x-service-token"] = secret;
+    headers["Authorization"] = `Bearer ${secret}`;
   }
   return headers;
 };
