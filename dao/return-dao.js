@@ -1288,120 +1288,71 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
           return reject(err);
         }
 
-        // If no DCM was scanned, the scanned invoice must be THIS order's invoice
-        const scannedDcm = String(dcmEmpId || "").trim().toUpperCase();
-        if (!scannedDcm.startsWith("DCM")) {
-          const norm = (v) => String(v || "").replace(/[#\s_-]/g, "").toUpperCase();
-          if (!invoiceNumber || norm(driverOrder.invNo) !== norm(invoiceNumber)) {
-            const err = new Error("Invalid QR. This QR does not belong to this order.");
-            err.statusCode = 400;
-            err.errorType = "INVALID_QR";
-            return reject(err);
-          }
+        // Strictly require DCM QR code. Scanning order/invoice QR is not permitted.
+        const upperEmpId = String(dcmEmpId || "").trim().toUpperCase();
+        if (!upperEmpId.startsWith("DCM")) {
+          const err = new Error(
+            "Invalid QR. Please scan your Distribution Centre Manager's QR code."
+          );
+          err.statusCode = 400;
+          err.errorType = "DCM_QR_REQUIRED";
+          return reject(err);
         }
 
         // 2. Find the officer who will receive the OTP
         const findOfficer = (cb) => {
-          const upperEmpId = String(dcmEmpId || "").trim().toUpperCase();
-
-          // ---- A DCM QR was scanned: validate strictly, NO fallback ----
-          if (upperEmpId.startsWith("DCM")) {
-            const officerSql = `
-              SELECT dcm.id, dcm.empId, dcm.firstNameEnglish, dcm.lastNameEnglish,
-                     dcm.status, dcm.distributedCenterId AS dcmCenterId,
-                     drv.distributedCenterId AS driverCenterId
-              FROM collection_officer.collectionofficer dcm
-              LEFT JOIN collection_officer.collectionofficer drv ON drv.id = ?
-              WHERE UPPER(dcm.empId) = ?
-              LIMIT 1
-            `;
-
-            return db.collectionofficer.query(
-              officerSql,
-              [driverId, upperEmpId],
-              (err, rows) => {
-                if (err) {
-                  console.error("Database error verifying DCM:", err.message);
-                  return cb(new Error("Failed to verify Distribution Centre Manager"));
-                }
-
-                if (!rows || rows.length === 0) {
-                  const e = new Error("Distribution Centre Manager not found");
-                  e.statusCode = 404;
-                  e.errorType = "DCM_NOT_FOUND";
-                  return cb(e);
-                }
-
-                const dcm = rows[0];
-
-                if (dcm.status !== "Approved") {
-                  const e = new Error("This Distribution Centre Manager is not active");
-                  e.statusCode = 400;
-                  e.errorType = "DCM_NOT_ACTIVE";
-                  return cb(e);
-                }
-
-                // Driver and DCM must belong to the SAME distribution center
-                if (
-                  dcm.driverCenterId == null ||
-                  dcm.dcmCenterId == null ||
-                  Number(dcm.driverCenterId) !== Number(dcm.dcmCenterId)
-                ) {
-                  const e = new Error(
-                    "This Distribution Centre Manager does not belong to your distribution center."
-                  );
-                  e.statusCode = 400;
-                  e.errorType = "CENTER_MISMATCH";
-                  return cb(e);
-                }
-
-                return cb(null, dcm);
-              }
-            );
-          }
-
-          // ---- Order (invoice) QR scanned: OTP goes ONLY to an Approved DCM of the SAME center ----
-          // (IRM / DIO / any non-DCM officer is never used.)
-          const driverSql = `
-            SELECT distributedCenterId
-            FROM collection_officer.collectionofficer
-            WHERE id = ?
+          const officerSql = `
+            SELECT dcm.id, dcm.empId, dcm.firstNameEnglish, dcm.lastNameEnglish,
+                   dcm.status, dcm.distributedCenterId AS dcmCenterId,
+                   drv.distributedCenterId AS driverCenterId
+            FROM collection_officer.collectionofficer dcm
+            LEFT JOIN collection_officer.collectionofficer drv ON drv.id = ?
+            WHERE UPPER(dcm.empId) = ?
             LIMIT 1
           `;
 
-          db.collectionofficer.query(driverSql, [driverId], (dErr, dRes) => {
-            if (dErr || !dRes || dRes.length === 0) {
-              return cb(new Error("Driver record not found"));
-            }
-
-            const driverCenterId = dRes[0].distributedCenterId;
-            if (!driverCenterId) {
-              const e = new Error("Driver has no distribution center assigned");
-              e.statusCode = 400;
-              e.errorType = "DRIVER_NO_CENTER";
-              return cb(e);
-            }
-
-            const centerDcmSql = `
-              SELECT id, empId, firstNameEnglish, lastNameEnglish, status
-              FROM collection_officer.collectionofficer
-              WHERE distributedCenterId = ?
-                AND status = 'Approved'
-                AND UPPER(empId) LIKE 'DCM%'
-              ORDER BY id ASC
-              LIMIT 1
-            `;
-            db.collectionofficer.query(centerDcmSql, [driverCenterId], (cErr, cRes) => {
-              if (!cErr && cRes && cRes.length > 0) {
-                return cb(null, cRes[0]);
+          return db.collectionofficer.query(
+            officerSql,
+            [driverId, upperEmpId],
+            (err, rows) => {
+              if (err) {
+                console.error("Database error verifying DCM:", err.message);
+                return cb(new Error("Failed to verify Distribution Centre Manager"));
               }
-              const e = new Error(
-                "No approved Distribution Centre Manager found for your center"
-              );
-              e.statusCode = 404;
-              return cb(e);
-            });
-          });
+
+              if (!rows || rows.length === 0) {
+                const e = new Error("Distribution Centre Manager not found");
+                e.statusCode = 404;
+                e.errorType = "DCM_NOT_FOUND";
+                return cb(e);
+              }
+
+              const dcm = rows[0];
+
+              if (dcm.status !== "Approved") {
+                const e = new Error("This Distribution Centre Manager is not active");
+                e.statusCode = 400;
+                e.errorType = "DCM_NOT_ACTIVE";
+                return cb(e);
+              }
+
+              // Driver and DCM must belong to the SAME distribution center
+              if (
+                dcm.driverCenterId == null ||
+                dcm.dcmCenterId == null ||
+                Number(dcm.driverCenterId) !== Number(dcm.dcmCenterId)
+              ) {
+                const e = new Error(
+                  "This Distribution Centre Manager does not belong to your distribution center."
+                );
+                e.statusCode = 400;
+                e.errorType = "CENTER_MISMATCH";
+                return cb(e);
+              }
+
+              return cb(null, dcm);
+            }
+          );
         };
 
         findOfficer((officerErr, officer) => {
