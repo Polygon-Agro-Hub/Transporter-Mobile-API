@@ -229,8 +229,7 @@ exports.submitHold = async ({ orderIds, holdReasonId, note, userId }) => {
 
                                                                     // Trigger Polygon mobile application real-time socket & push notification
                                                                     invoiceResult.forEach((row) => {
-                                                                        polygonNotificationService.notifyOrderOnHold(row.id, row.invNo, reasonText).catch(() => {});
-                                                                        salesdashNotificationService.notifySalesDashOrderOnHold(row.id, row.invNo, reasonText).catch(() => {});
+                                                                        polygonNotificationService.notifyOrderOnHold(row.id, row.invNo, reasonText).catch(() => { });
                                                                     });
                                                                 },
                                                             );

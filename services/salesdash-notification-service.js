@@ -13,7 +13,9 @@ const getSalesDashBaseUrl = () => {
   return url.replace(/\/+$/, "");
 };
 
-const { SALESDASH_TRIGGER_SECRET } = require("../constants/notification-secrets");
+const {
+  SALESDASH_TRIGGER_SECRET,
+} = require("../constants/notification-secrets");
 
 const getServiceHeaders = () => {
   const secret = SALESDASH_TRIGGER_SECRET;
@@ -42,13 +44,16 @@ const resolveSalesAgentId = async (orderId) => {
        WHERE po.id = ? OR po.orderId = ? OR o.id = ?
        ORDER BY (po.id = ?) DESC
        LIMIT 1`,
-      [orderId, orderId, orderId, orderId]
+      [orderId, orderId, orderId, orderId],
     );
     if (rows && rows.length > 0 && rows[0].salesAgent) {
       return rows[0].salesAgent;
     }
   } catch (err) {
-    console.warn("[SalesDash Notification] DB resolveSalesAgentId error:", err.message);
+    console.warn(
+      "[SalesDash Notification] DB resolveSalesAgentId error:",
+      err.message,
+    );
   }
   return null;
 };
@@ -66,7 +71,9 @@ const triggerSalesDashNotification = async ({
   skipDbInsert = true,
 }) => {
   if (!orderId) {
-    console.warn("[SalesDash Notification] orderId is required to trigger notification.");
+    console.warn(
+      "[SalesDash Notification] orderId is required to trigger notification.",
+    );
     return false;
   }
 
@@ -78,7 +85,7 @@ const triggerSalesDashNotification = async ({
 
   if (!salesAgentId) {
     console.log(
-      `ℹ️ [SalesDash Notification] Order ${orderId} is not assigned to any Sales Agent. Skipping.`
+      `ℹ️ [SalesDash Notification] Order ${orderId} is not assigned to any Sales Agent. Skipping.`,
     );
     return true;
   }
@@ -103,13 +110,13 @@ const triggerSalesDashNotification = async ({
     });
 
     console.log(
-      `📢 [SalesDash Socket] Dispatched "${title}" to Sales Agent ${salesAgentId} for order ${orderId} (Status: ${response.status})`
+      `📢 [SalesDash Socket] Dispatched "${title}" to Sales Agent ${salesAgentId} for order ${orderId} (Status: ${response.status})`,
     );
     return true;
   } catch (err) {
     console.warn(
       `⚠️ [SalesDash Socket] Could not dispatch notification to Sales Dash API (${url}) for order ${orderId}:`,
-      err.response?.data?.message || err.message
+      err.response?.data?.message || err.message,
     );
     return false;
   }
@@ -144,20 +151,6 @@ const notifySalesDashOrderOnTheWay = async (processOrderId, invNo) => {
 };
 
 /**
- * Driver restarts delivery journey from Hold
- */
-const notifySalesDashOrderOnTheWayAgain = async (processOrderId, invNo) => {
-  return triggerSalesDashNotification({
-    orderId: processOrderId,
-    title: "Order is On the Way Again",
-    message: `Order #${invNo} is back on the way for delivery.`,
-    eventType: "order_on_the_way_again",
-    data: { processOrderId, invNo },
-    skipDbInsert: true,
-  });
-};
-
-/**
  * Driver marks order as Delivered with signature
  */
 const notifySalesDashOrderDelivered = async (processOrderId, invNo) => {
@@ -171,42 +164,9 @@ const notifySalesDashOrderDelivered = async (processOrderId, invNo) => {
   });
 };
 
-/**
- * Driver marks order as Hold
- */
-const notifySalesDashOrderOnHold = async (processOrderId, invNo, reasonText = "") => {
-  const reasonSuffix = reasonText ? ` Reason: ${reasonText}` : "";
-  return triggerSalesDashNotification({
-    orderId: processOrderId,
-    title: "Order Delivery on Hold",
-    message: `Delivery attempt for order #${invNo} was put on hold.${reasonSuffix}`,
-    eventType: "order_hold",
-    data: { processOrderId, invNo, reason: reasonText },
-    skipDbInsert: true,
-  });
-};
-
-/**
- * Driver marks order as Return
- */
-const notifySalesDashOrderReturned = async (processOrderId, invNo, reasonText = "") => {
-  const reasonSuffix = reasonText ? ` Reason: ${reasonText}` : "";
-  return triggerSalesDashNotification({
-    orderId: processOrderId,
-    title: "Order Returned",
-    message: `Order #${invNo} could not be delivered and has been returned.${reasonSuffix}`,
-    eventType: "order_returned",
-    data: { processOrderId, invNo, reason: reasonText },
-    skipDbInsert: true,
-  });
-};
-
 module.exports = {
   triggerSalesDashNotification,
   notifySalesDashOrderCollected,
   notifySalesDashOrderOnTheWay,
-  notifySalesDashOrderOnTheWayAgain,
   notifySalesDashOrderDelivered,
-  notifySalesDashOrderOnHold,
-  notifySalesDashOrderReturned,
 };

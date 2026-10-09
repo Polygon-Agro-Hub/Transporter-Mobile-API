@@ -739,7 +739,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                             // Trigger Polygon mobile application real-time socket & push notification
                                             invoiceResult.forEach((row) => {
                                               polygonNotificationService.notifyOrderReturned(row.id, row.invNo, reasonText).catch(() => { });
-                                              salesdashNotificationService.notifySalesDashOrderReturned(row.id, row.invNo, reasonText).catch(() => { });
                                             });
 
                                             // Send SMS to customer for each returned order (fire-and-forget)

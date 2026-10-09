@@ -177,10 +177,10 @@ exports.SaveDriverOrder = async (driverId, processOrderId) => {
                   });
 
                   // Trigger Polygon mobile application real-time socket & push notification
-                  polygonNotificationService.notifyOrderCollected(processOrderId, invNo).catch(() => {});
+                  polygonNotificationService.notifyOrderCollected(processOrderId, invNo).catch(() => { });
 
                   // Trigger Sales Dash mobile application real-time socket & push notification
-                  salesdashNotificationService.notifySalesDashOrderCollected(processOrderId, invNo).catch(() => {});
+                  salesdashNotificationService.notifySalesDashOrderCollected(processOrderId, invNo).catch(() => { });
                 } catch (notifErr) {
                   console.error('[SaveDriverOrder] Failed to insert ordernotfication:', notifErr.message);
                 }
@@ -1023,8 +1023,8 @@ exports.startJourneyDAO = async (driverId, orderIds) => {
 
                           // Trigger Polygon mobile application real-time socket & push notification for all orders
                           updatedResults.forEach((row) => {
-                            polygonNotificationService.notifyOrderOnTheWay(row.processOrderId, row.invNo).catch(() => {});
-                            salesdashNotificationService.notifySalesDashOrderOnTheWay(row.processOrderId, row.invNo).catch(() => {});
+                            polygonNotificationService.notifyOrderOnTheWay(row.processOrderId, row.invNo).catch(() => { });
+                            salesdashNotificationService.notifySalesDashOrderOnTheWay(row.processOrderId, row.invNo).catch(() => { });
                           });
                         }
 
@@ -1695,8 +1695,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
 
                                   // Trigger Polygon mobile application real-time socket & push notification
                                   invRows.forEach((row) => {
-                                    polygonNotificationService.notifyOrderDelivered(row.id, row.invNo).catch(() => {});
-                                    salesdashNotificationService.notifySalesDashOrderDelivered(row.id, row.invNo).catch(() => {});
+                                    polygonNotificationService.notifyOrderDelivered(row.id, row.invNo).catch(() => { });
+                                    salesdashNotificationService.notifySalesDashOrderDelivered(row.id, row.invNo).catch(() => { });
                                   });
                                 } else if (errInv) {
                                   console.error('[saveSignatureAndUpdateStatusDAO] Failed to fetch invNo for ordernotfication:', errInv.message);
@@ -1889,8 +1889,7 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
 
         // Trigger Polygon mobile application real-time socket & push notification
         invNoRows.forEach((row) => {
-          polygonNotificationService.notifyOrderOnTheWayAgain(row.id, row.invNo).catch(() => {});
-          salesdashNotificationService.notifySalesDashOrderOnTheWayAgain(row.id, row.invNo).catch(() => {});
+          polygonNotificationService.notifyOrderOnTheWayAgain(row.id, row.invNo).catch(() => { });
         });
       }
     } catch (notifErr) {
