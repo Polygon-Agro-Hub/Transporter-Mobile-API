@@ -237,8 +237,43 @@ exports.validateLoadQR = asyncHandler(async (req, res) => {
   }
 });
 
+// Check if driver already has another load with journeyStatus = 'Start'
+exports.checkActiveJourney = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({ status: "error", message: "Unauthorized" });
+  }
+
+  const { transferCode, loadId } = req.query;
+  const targetCode = transferCode || loadId;
+  if (!targetCode) {
+    return res.status(400).json({ status: "error", message: "Transfer code or load ID is required" });
+  }
+
+  try {
+    const active = await loadDao.getActiveJourney(req.user.id, targetCode);
+    return res.status(200).json({
+      status: "success",
+      data: {
+        hasActiveJourney: !!active,
+        activeLoadCode: active ? active.transferCode : null,
+      },
+    });
+  } catch (error) {
+    console.error("Error checking active journey:", error.message);
+    return res.status(500).json({ status: "error", message: "Failed to check active journey" });
+  }
+});
+
 // Update Journey Status ('Pending', 'Start', 'End')
 exports.updateJourneyStatus = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const driverId = req.user.id;
   const { transferCode, loadId, journeyStatus } = req.body;
   const targetCode = transferCode || loadId;
 
@@ -257,7 +292,20 @@ exports.updateJourneyStatus = asyncHandler(async (req, res) => {
   }
 
   try {
-    const result = await loadDao.updateJourneyStatus(targetCode, journeyStatus);
+    const result = await loadDao.updateJourneyStatus(
+      targetCode,
+      journeyStatus,
+      driverId
+    );
+
+    // No row matched: load doesn't exist or isn't assigned to this driver
+    if (!result.affectedRows) {
+      return res.status(404).json({
+        status: "error",
+        message: "Load not found or not assigned to you",
+      });
+    }
+
     return res.status(200).json({
       status: "success",
       message: `Journey status updated to ${journeyStatus} successfully`,
@@ -265,9 +313,12 @@ exports.updateJourneyStatus = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating journey status:", error.message);
-    return res.status(500).json({
+
+    // 409 comes from the DAO when another load is already 'Start'
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
       status: "error",
-      message: "Failed to update journey status",
+      message: error.message || "Failed to update journey status",
     });
   }
 });
