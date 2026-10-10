@@ -28,4 +28,7 @@ router.post("/update-journey-status", auth, loadEp.updateJourneyStatus);
 // Mark load as delivered/unloaded
 router.post("/unload", auth, loadEp.unloadLoad);
 
+// Check if driver already started another load's journey
+router.get("/check-active-journey", auth, loadEp.checkActiveJourney);
+
 module.exports = router;

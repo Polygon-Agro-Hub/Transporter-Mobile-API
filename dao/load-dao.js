@@ -514,28 +514,69 @@ exports.validateLoadQR = async (transferCode, currentDriverId) => {
 };
 
 /**
+ * Find another load of this driver whose journey is already started
+ * (journeyStatus = 'Start', not yet delivered), excluding the current load.
+ */
+exports.getActiveJourney = async (driverId, currentTransferCodeOrId) => {
+  return new Promise((resolve, reject) => {
+    const isNumeric =
+      !isNaN(currentTransferCodeOrId) && !isNaN(parseInt(currentTransferCodeOrId, 10));
+    const paramId = isNumeric ? parseInt(currentTransferCodeOrId, 10) : -1;
+
+    const sql = `
+      SELECT id, transferCode, journeyStatus
+      FROM collection_officer.transportload
+      WHERE conformDriverId = ?
+        AND journeyStatus = 'Start'
+        AND unloadTime IS NULL
+        AND NOT (transferCode = ? OR id = ?)
+      LIMIT 1
+    `;
+
+    db.query(sql, [driverId, String(currentTransferCodeOrId), paramId], (err, results) => {
+      if (err) {
+        console.error("Database error checking active journey:", err.message);
+        return reject(new Error("Failed to check active journey"));
+      }
+      resolve(results.length > 0 ? results[0] : null);
+    });
+  });
+};
+
+/**
  * Update journeyStatus ('Pending', 'Start', 'End')
  */
-exports.updateJourneyStatus = async (transferCodeOrId, journeyStatus) => {
+exports.updateJourneyStatus = async (transferCodeOrId, journeyStatus, driverId) => {
+  const validStatuses = ["Pending", "Start", "End"];
+  const statusToSet = validStatuses.includes(journeyStatus) ? journeyStatus : "Pending";
+
+  // Block starting a second transport
+  if (statusToSet === "Start") {
+    const active = await exports.getActiveJourney(driverId, transferCodeOrId);
+    if (active) {
+      const err = new Error(
+        `You already have an active journey (${active.transferCode}). Finish it before starting another load.`
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const isNumeric = !isNaN(transferCodeOrId) && !isNaN(parseInt(transferCodeOrId, 10));
     const paramId = isNumeric ? parseInt(transferCodeOrId, 10) : -1;
 
-    const validStatuses = ["Pending", "Start", "End"];
-    const statusToSet = validStatuses.includes(journeyStatus) ? journeyStatus : "Pending";
-
     const sql = `
       UPDATE collection_officer.transportload
       SET journeyStatus = ?
-      WHERE transferCode = ? OR id = ?
+      WHERE (transferCode = ? OR id = ?) AND conformDriverId = ?
     `;
 
-    db.query(sql, [statusToSet, String(transferCodeOrId), paramId], (err, result) => {
+    db.query(sql, [statusToSet, String(transferCodeOrId), paramId, driverId], (err, result) => {
       if (err) {
         console.error("Database error updating journeyStatus:", err.message);
         return reject(new Error("Failed to update journey status"));
       }
-
       resolve({
         transferCode: transferCodeOrId,
         journeyStatus: statusToSet,
