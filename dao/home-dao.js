@@ -383,7 +383,7 @@ exports.getOrderAmounts = async (orderIds) => {
     const sql = `
       SELECT 
         do.id,
-        COALESCE(o.fullTotal, 0) as amount
+        COALESCE(po.fullTotal, 0) as amount
       FROM 
         collection_officer.driverorders do
       INNER JOIN 
@@ -395,8 +395,8 @@ exports.getOrderAmounts = async (orderIds) => {
       WHERE 
         do.id IN (?)
         AND dom.isHandOver = 0
-        AND o.fullTotal IS NOT NULL
-        AND o.fullTotal > 0
+        AND po.fullTotal IS NOT NULL
+        AND po.fullTotal > 0
     `;
 
     db.collectionofficer.query(sql, [orderIds], (err, results) => {
