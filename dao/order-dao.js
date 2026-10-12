@@ -1890,7 +1890,6 @@ exports.reStartJourneyDAO = async (driverId, orderIds) => {
         // Trigger Polygon mobile application real-time socket & push notification
         invNoRows.forEach((row) => {
           polygonNotificationService.notifyOrderOnTheWayAgain(row.id, row.invNo).catch(() => {});
-          salesdashNotificationService.notifySalesDashOrderOnTheWayAgain(row.id, row.invNo).catch(() => {});
         });
       }
     } catch (notifErr) {
