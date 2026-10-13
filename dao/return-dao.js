@@ -3,7 +3,6 @@ const { HANDLING_FEE_CONSTANTS } = require("../constants/handling-fee");
 const axios = require("axios");
 const returnOtpCache = require("../services/return-otp-cache");
 const polygonNotificationService = require("../services/polygon-notification-service");
-const salesdashNotificationService = require("../services/salesdash-notification-service");
 
 // Get All Return Reasons
 exports.getReason = async () => {
@@ -87,11 +86,11 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
             po.creditPaid,
             po.moneyPaid,
             po.orderId,
-            o.fullTotal,
-            o.deliveryCharge AS currentDeliveryCharge,
+            po.fullTotal,
+            po.deliveryCharge AS currentDeliveryCharge,
             o.buildingType,
-            o.isCoupon,
-            o.couponType,
+            po.isCoupon,
+            po.couponType,
             o.userId,
             mu.phoneCode,
             mu.phoneNumber
@@ -739,7 +738,6 @@ exports.submitReturn = async ({ orderIds, returnReasonId, note, userId }) => {
                                             // Trigger Polygon mobile application real-time socket & push notification
                                             invoiceResult.forEach((row) => {
                                               polygonNotificationService.notifyOrderReturned(row.id, row.invNo, reasonText).catch(() => { });
-                                              salesdashNotificationService.notifySalesDashOrderReturned(row.id, row.invNo, reasonText).catch(() => { });
                                             });
 
                                             // Send SMS to customer for each returned order (fire-and-forget)
@@ -872,11 +870,11 @@ exports.getDriverReturnOrdersDAO = async (driverId) => {
         o.phonecode2,
         o.sheduleTime,
         o.buildingType,
-        o.total,
-        o.fullTotal,
-        o.deliveryCharge,
-        o.isCoupon,
-        o.couponType,
+        po.total,
+        po.fullTotal,
+        po.deliveryCharge,
+        po.isCoupon,
+        po.couponType,
         
         -- User Details
         u.id as userId,
