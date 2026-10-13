@@ -144,20 +144,6 @@ const notifySalesDashOrderOnTheWay = async (processOrderId, invNo) => {
 };
 
 /**
- * Driver restarts delivery journey from Hold
- */
-const notifySalesDashOrderOnTheWayAgain = async (processOrderId, invNo) => {
-  return triggerSalesDashNotification({
-    orderId: processOrderId,
-    title: "Order is On the Way Again",
-    message: `Order #${invNo} is back on the way for delivery.`,
-    eventType: "order_on_the_way_again",
-    data: { processOrderId, invNo },
-    skipDbInsert: true,
-  });
-};
-
-/**
  * Driver marks order as Delivered with signature
  */
 const notifySalesDashOrderDelivered = async (processOrderId, invNo) => {
@@ -171,42 +157,9 @@ const notifySalesDashOrderDelivered = async (processOrderId, invNo) => {
   });
 };
 
-/**
- * Driver marks order as Hold
- */
-const notifySalesDashOrderOnHold = async (processOrderId, invNo, reasonText = "") => {
-  const reasonSuffix = reasonText ? ` Reason: ${reasonText}` : "";
-  return triggerSalesDashNotification({
-    orderId: processOrderId,
-    title: "Order Delivery on Hold",
-    message: `Delivery attempt for order #${invNo} was put on hold.${reasonSuffix}`,
-    eventType: "order_hold",
-    data: { processOrderId, invNo, reason: reasonText },
-    skipDbInsert: true,
-  });
-};
-
-/**
- * Driver marks order as Return
- */
-const notifySalesDashOrderReturned = async (processOrderId, invNo, reasonText = "") => {
-  const reasonSuffix = reasonText ? ` Reason: ${reasonText}` : "";
-  return triggerSalesDashNotification({
-    orderId: processOrderId,
-    title: "Order Returned",
-    message: `Order #${invNo} could not be delivered and has been returned.${reasonSuffix}`,
-    eventType: "order_returned",
-    data: { processOrderId, invNo, reason: reasonText },
-    skipDbInsert: true,
-  });
-};
-
 module.exports = {
   triggerSalesDashNotification,
   notifySalesDashOrderCollected,
   notifySalesDashOrderOnTheWay,
-  notifySalesDashOrderOnTheWayAgain,
   notifySalesDashOrderDelivered,
-  notifySalesDashOrderOnHold,
-  notifySalesDashOrderReturned,
 };
