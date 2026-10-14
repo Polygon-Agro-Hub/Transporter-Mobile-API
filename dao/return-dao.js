@@ -1327,7 +1327,12 @@ exports.scanDcmAndCreateReturnOtp = async ({ orderId, invoiceNumber, dcmEmpId, d
 
               const dcm = rows[0];
 
-              if (dcm.status !== "Approved") {
+              // Check user status column only (ignoring onlineStatus)
+              const dcmStatus = String(dcm.status || "").trim().toLowerCase();
+              if (dcmStatus !== "approved") {
+                console.warn(
+                  `[DCM Verification Failed] DCM ${upperEmpId} has status: '${dcm.status}' (expected 'Approved')`
+                );
                 const e = new Error("This Distribution Centre Manager is not active");
                 e.statusCode = 400;
                 e.errorType = "DCM_NOT_ACTIVE";
