@@ -497,15 +497,7 @@ exports.createTransaction = async (
 exports.getLatestTransactionStatus = async (driverId) => {
   return new Promise((resolve, reject) => {
     const sql = `
-      SELECT 
-        tx.id, 
-        tx.transCode, 
-        tx.transAmount, 
-        tx.paySlip, 
-        tx.transStatus,
-        CONVERT_TZ(tx.updatedAt, '+00:00', '+05:30') as updatedAt,
-        tx.rejectReason, 
-        CONVERT_TZ(tx.createdAt, '+00:00', '+05:30') as createdAt 
+      SELECT tx.id, tx.transCode, tx.transAmount, tx.paySlip, tx.transStatus,tx.updatedAt,tx.rejectReason, tx.createdAt 
       FROM collection_officer.driverordertransaction tx
       INNER JOIN collection_officer.driverordermain dom ON tx.drvOrderMainId = dom.id
       WHERE dom.driverId = ? AND dom.isHandOver = 0
