@@ -253,7 +253,7 @@ exports.getEarnings = async (driverId, date) => {
       INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE dom.driverId = ?
-        AND DATE(do.createdAt) = ?
+        AND DATE(CONVERT_TZ(do.createdAt, '+00:00', '+05:30')) = ?
     `;
     const [rows] = await db.collectionofficer
       .promise()
@@ -313,12 +313,12 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
         po.invNo,
         po.paymentMethod,
         po.status,
-        do.createdAt
+        CONVERT_TZ(do.createdAt, '+00:00', '+05:30') as createdAt
       FROM collection_officer.driverorders do
       INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
       WHERE dom.driverId = ?
-        AND DATE(do.createdAt) BETWEEN ? AND ?
+        AND DATE(CONVERT_TZ(do.createdAt, '+00:00', '+05:30')) BETWEEN ? AND ?
       ORDER BY do.createdAt DESC
     `;
     const [rows] = await db.collectionofficer
