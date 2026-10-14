@@ -11,8 +11,6 @@ const {
 const { initSocket } = require("./socket/socket");
 const app = express();
 const server = http.createServer(app);
-
-// Initialize Socket.IO
 const io = initSocket(server);
 
 // Base path for the API
