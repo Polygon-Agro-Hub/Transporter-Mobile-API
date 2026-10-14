@@ -662,10 +662,10 @@ exports.getOrderUserDetailsDAO = async (driverId, processOrderIds) => {
         o.sheduleTime,
         o.buildingType,
         o.delivaryMethod,
-        o.fullTotal,
-        o.deliveryCharge,
-        o.isCoupon,
-        o.couponType,
+        po.fullTotal,
+        po.deliveryCharge,
+        po.isCoupon,
+        po.couponType,
         po.id as processOrderId,
         po.invNo,
         po.paymentMethod,
@@ -1137,13 +1137,13 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             po.orderId,
             po.amount AS paidAmount,
             po.creditPaid,
-            o.fullTotal,
+            po.fullTotal,
             o.userId,
-            o.deliveryCharge AS currentDeliveryCharge,
+            po.deliveryCharge AS currentDeliveryCharge,
             o.buildingType,
-            o.isCoupon,
-            o.couponType,
-            o.couponValue,
+            po.isCoupon,
+            po.couponType,
+            po.couponValue,
             mu.creditBalance
           FROM collection_officer.processorders po
           JOIN collection_officer.orders o ON po.orderId = o.id
@@ -1536,7 +1536,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     const updatePayableOrdersQuery = `
                       UPDATE collection_officer.processorders po
                       JOIN collection_officer.orders o ON po.orderId = o.id
-                      SET po.isPaid = 1, po.amount = o.fullTotal
+                      SET po.isPaid = 1, po.amount = po.fullTotal
                       WHERE po.id IN (?)
                     `;
 

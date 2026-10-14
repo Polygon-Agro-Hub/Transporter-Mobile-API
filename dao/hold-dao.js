@@ -1,6 +1,5 @@
 const db = require("../startup/database");
 const polygonNotificationService = require("../services/polygon-notification-service");
-const salesdashNotificationService = require("../services/salesdash-notification-service");
 
 exports.getReason = async () => {
     return new Promise((resolve, reject) => {
