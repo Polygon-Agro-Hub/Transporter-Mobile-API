@@ -21,7 +21,7 @@ const upload = multer({
     if (extname && mimetype) {
       return cb(null, true);
     } else {
-      return cb(new Error("Only JPG, PNG, HEIC, and PDF formats are supported"));
+      return cb(new Error("Only PNG, JPG, and PDF formats are supported"));
     }
   },
 });
