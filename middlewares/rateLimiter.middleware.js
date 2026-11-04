@@ -8,7 +8,7 @@ const loginRateLimiter = (req, res, next) => {
   const ip = req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress;
   const now = Date.now();
   const windowMs = 15 * 60 * 1000; // 15 minutes window
-  const maxAttempts = 5;
+  const maxAttempts = 10;
 
   if (!loginAttempts.has(ip)) {
     loginAttempts.set(ip, []);
