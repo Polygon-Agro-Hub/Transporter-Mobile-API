@@ -248,12 +248,36 @@ exports.getEarnings = async (driverId, date) => {
       SELECT 
         do.earnPrice,
         po.paymentMethod,
-        po.status
+        po.status,
+        COALESCE(
+          CASE 
+            WHEN LOWER(po.status) IN ('return', 'return received') OR LOWER(do.drvStatus) IN ('return', 'return received')
+              THEN dro.returnTime
+            ELSE po.deliveredTime
+          END,
+          po.deliveredTime,
+          dro.returnTime
+        ) AS completionTime
       FROM collection_officer.driverorders do
       INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      LEFT JOIN (
+        SELECT drvOrderId, MAX(createdAt) AS returnTime
+        FROM collection_officer.driverreturnorders
+        GROUP BY drvOrderId
+      ) dro ON dro.drvOrderId = do.id
       WHERE dom.driverId = ?
-        AND DATE(do.createdAt) = ?
+        AND DATE(
+          COALESCE(
+            CASE 
+              WHEN LOWER(po.status) IN ('return', 'return received') OR LOWER(do.drvStatus) IN ('return', 'return received')
+                THEN dro.returnTime
+              ELSE po.deliveredTime
+            END,
+            po.deliveredTime,
+            dro.returnTime
+          )
+        ) = ?
     `;
     const [rows] = await db.collectionofficer
       .promise()
@@ -313,13 +337,38 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
         po.invNo,
         po.paymentMethod,
         po.status,
-        do.createdAt
+        po.deliveredTime,
+        dro.returnTime,
+        COALESCE(
+          CASE 
+            WHEN LOWER(po.status) IN ('return', 'return received') OR LOWER(do.drvStatus) IN ('return', 'return received')
+              THEN dro.returnTime
+            ELSE po.deliveredTime
+          END,
+          po.deliveredTime,
+          dro.returnTime
+        ) AS completionTime
       FROM collection_officer.driverorders do
       INNER JOIN collection_officer.processorders po ON do.orderId = po.id
       INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+      LEFT JOIN (
+        SELECT drvOrderId, MAX(createdAt) AS returnTime
+        FROM collection_officer.driverreturnorders
+        GROUP BY drvOrderId
+      ) dro ON dro.drvOrderId = do.id
       WHERE dom.driverId = ?
-        AND DATE(do.createdAt) BETWEEN ? AND ?
-      ORDER BY do.createdAt DESC
+        AND DATE(
+          COALESCE(
+            CASE 
+              WHEN LOWER(po.status) IN ('return', 'return received') OR LOWER(do.drvStatus) IN ('return', 'return received')
+                THEN dro.returnTime
+              ELSE po.deliveredTime
+            END,
+            po.deliveredTime,
+            dro.returnTime
+          )
+        ) BETWEEN ? AND ?
+      ORDER BY completionTime DESC
     `;
     const [rows] = await db.collectionofficer
       .promise()
@@ -358,9 +407,17 @@ exports.getEarningsHistory = async (driverId, fromDate, toDate) => {
           cardOrders++;
         }
 
+        const rawTime = row.completionTime;
+        let finalDateTime = rawTime;
+        if (rawTime instanceof Date) {
+          finalDateTime = rawTime.toISOString();
+        } else if (typeof rawTime === "string") {
+          finalDateTime = rawTime.includes("T") ? rawTime : rawTime.replace(" ", "T");
+        }
+
         return {
           orderId: row.invNo,
-          dateTime: row.createdAt,
+          dateTime: finalDateTime,
           method: method || "cash",
           status: row.status,
           earnings: earnPrice,

@@ -40,15 +40,14 @@ const uploadFileToS3 = async (fileBuffer, fileName, keyPrefix) => {
     let fileExtension = fileName.split(".").pop().toLowerCase();
     let bodyBuffer = fileBuffer;
 
-    // Convert HEIC/HEIF -> JPG
+    // Convert HEIC/HEIF -> PNG
     if (fileExtension === "heic" || fileExtension === "heif") {
       const converted = await convert({
         buffer: fileBuffer,
-        format: "JPEG",
-        quality: 0.9,
+        format: "PNG",
       });
       bodyBuffer = Buffer.from(converted);
-      fileExtension = "jpg";
+      fileExtension = "png";
     }
 
     const uniqueFileName = `${uuidv4()}.${fileExtension}`;

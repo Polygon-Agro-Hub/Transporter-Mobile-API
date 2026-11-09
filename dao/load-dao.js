@@ -275,7 +275,7 @@ exports.getLoadDetails = async (transferCodeOrId, driverId = null) => {
         LEFT JOIN plant_care.cropvariety cv ON li.varietyId = cv.id
         LEFT JOIN collection_officer.loadedcrates lc ON lc.loadId = li.id
         WHERE li.transportId = ?
-        ORDER BY li.id ASC, lc.grade ASC, lc.crateIndex ASC
+        ORDER BY COALESCE(cv.varietyNameEnglish, 'Crop') ASC, li.id ASC, lc.grade ASC, lc.crateIndex ASC
       `;
 
       db.query(itemsSql, [loadHeader.id], (itemsErr, itemsResults) => {
@@ -293,7 +293,9 @@ exports.getLoadDetails = async (transferCodeOrId, driverId = null) => {
           if (!cropMap.has(varId)) {
             cropMap.set(varId, {
               id: String(varId),
+              varietyId: row.varietyId,
               cropName: row.varietyNameEnglish || "Crop",
+              varietyName: row.varietyNameEnglish || "Crop",
               cropNameSinhala: row.varietyNameSinhala || "",
               imageUri:
                 row.varietyImage ||
@@ -323,6 +325,14 @@ exports.getLoadDetails = async (transferCodeOrId, driverId = null) => {
           }
         });
 
+        const sortedCrops = Array.from(cropMap.values()).sort((a, b) =>
+          (a.cropName || a.varietyName || "").trim().localeCompare(
+            (b.cropName || b.varietyName || "").trim(),
+            undefined,
+            { sensitivity: "base", numeric: true }
+          )
+        );
+
         resolve({
           load: {
             id: loadHeader.id,
@@ -344,7 +354,7 @@ exports.getLoadDetails = async (transferCodeOrId, driverId = null) => {
             totalWeightKg: totalLoadWeightKg,
             totalCrates: totalLoadCrates,
           },
-          crops: Array.from(cropMap.values()),
+          crops: sortedCrops,
         });
       });
     });
