@@ -3,17 +3,21 @@ const polygonNotificationService = require("../services/polygon-notification-ser
 const salesdashNotificationService = require("../services/salesdash-notification-service");
 
 // Get process order ID by invoice number
+// Get process order info (id, status, invNo, buyerType) by invoice number
 exports.GetProcessOrderInfoByInvNo = async (invNo) => {
   return new Promise((resolve, reject) => {
     const cleanedInvNo = (invNo || "").toString().trim();
 
     const sql = `
       SELECT 
-        id,
-        status,
-        invNo
-      FROM collection_officer.processorders 
-      WHERE TRIM(UPPER(invNo)) = TRIM(UPPER(?))
+        po.id,
+        po.status,
+        po.invNo,
+        mu.buyerType
+      FROM collection_officer.processorders po
+      LEFT JOIN collection_officer.orders o ON po.orderId = o.id
+      LEFT JOIN collection_officer.marketplaceusers mu ON o.userId = mu.id
+      WHERE TRIM(UPPER(po.invNo)) = TRIM(UPPER(?))
       LIMIT 1
     `;
 
@@ -31,6 +35,35 @@ exports.GetProcessOrderInfoByInvNo = async (invNo) => {
         id: results[0].id,
         status: results[0].status,
         invNo: results[0].invNo,
+        buyerType: results[0].buyerType,
+      });
+    });
+  });
+};
+
+// Get Driver's EmpId + JobRole
+exports.GetDriverProfile = async (driverId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT empId, jobRole
+      FROM collection_officer.collectionofficer
+      WHERE id = ?
+      LIMIT 1
+    `;
+
+    db.collectionofficer.query(sql, [driverId], (err, results) => {
+      if (err) {
+        console.error("Database error fetching driver profile:", err.message);
+        return reject(new Error("Failed to fetch driver details"));
+      }
+
+      if (results.length === 0) {
+        return reject(new Error("Driver not found"));
+      }
+
+      resolve({
+        empId: results[0].empId,
+        jobRole: results[0].jobRole,
       });
     });
   });
@@ -1106,6 +1139,16 @@ exports.verifyDriverAccessToOrdersDAO = async (driverId, processOrderIds) => {
   });
 };
 
+function isWholesaleBuyer(buyerType) {
+  return (
+    (buyerType || "")
+      .toString()
+      .trim()
+      .toLowerCase()
+      .replace(/s$/, "") === "wholesale"
+  );
+}
+
 exports.saveSignatureAndUpdateStatusDAO = async (
   processOrderIds,
   signaturePath,
@@ -1144,7 +1187,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             po.isCoupon,
             po.couponType,
             po.couponValue,
-            mu.creditBalance
+            mu.creditBalance,
+            mu.buyerType
           FROM collection_officer.processorders po
           JOIN collection_officer.orders o ON po.orderId = o.id
           JOIN collection_officer.marketplaceusers mu ON o.userId = mu.id
@@ -1169,10 +1213,18 @@ exports.saveSignatureAndUpdateStatusDAO = async (
             }
 
             try {
-              const cashOrders = paymentDetails.filter(
+              // ---- Split wholesale (no payment updates) from retail (normal flow) ----
+              const wholesaleOrders = paymentDetails.filter((order) =>
+                isWholesaleBuyer(order.buyerType),
+              );
+              const retailOrders = paymentDetails.filter(
+                (order) => !isWholesaleBuyer(order.buyerType),
+              );
+
+              const cashOrders = retailOrders.filter(
                 (order) => order.paymentMethod === "Cash",
               );
-              const cardOrders = paymentDetails.filter(
+              const cardOrders = retailOrders.filter(
                 (order) => order.paymentMethod === "Card",
               );
 
@@ -1246,8 +1298,8 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 });
               }
 
+              // ---------------- RETAIL: CASH ----------------
               const cashOrderUpdates = [];
-
               const cashDeliveryChargeUpdates = [];
 
               for (const order of cashOrders) {
@@ -1296,6 +1348,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 });
               }
 
+              // ---------------- RETAIL: CARD ----------------
               const creditBalanceDeltaByUser = {};
               const cardDeliveryChargeCorrections = [];
 
@@ -1340,18 +1393,43 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                 });
               }
 
+              // ---------------- WHOLESALE: curDlvrCharge ONLY ----------------
+              // No isPaid / amount / moneyPaid / creditBalance changes.
+              const wholesaleDeliveryChargeUpdates = [];
+
+              for (const order of wholesaleOrders) {
+                if (isFreeDeliveryCoupon(order)) {
+                  continue;
+                }
+
+                const city = orderIdToCity[order.orderId];
+                const cityCharge = city ? cityToCharge[city] : undefined;
+
+                const newDeliveryCharge =
+                  cityCharge !== undefined
+                    ? Number(cityCharge)
+                    : Number(order.currentDeliveryCharge) || 0;
+
+                wholesaleDeliveryChargeUpdates.push({
+                  processOrderId: order.processOrderId,
+                  orderId: order.orderId,
+                  newDeliveryCharge,
+                });
+              }
+
+              // ---------------- Driver earn price ----------------
               const earnPriceInfoQuery = `
-  SELECT
-    do.id AS driverOrderId,
-    do.orderId,
-    do.drvOrderMainId,
-    dcs.slvPayout
-  FROM collection_officer.driverorders do
-  INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-  INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
-  LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
-  WHERE do.orderId IN (?)
-`;
+                SELECT
+                  do.id AS driverOrderId,
+                  do.orderId,
+                  do.drvOrderMainId,
+                  dcs.slvPayout
+                FROM collection_officer.driverorders do
+                INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+                INNER JOIN collection_officer.collectionofficer co ON dom.driverId = co.id
+                LEFT JOIN collection_officer.drivercategoryslave dcs ON co.driverCatId = dcs.id
+                WHERE do.orderId IN (?)
+              `;
 
               const earnPriceRows = await queryAsync(
                 connection,
@@ -1419,6 +1497,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
 
                   const updatePromises = [];
 
+                  // Status + delivered time + delivered location (ALL orders, retail and wholesale)
                   const updateAllOrdersStatusQuery = `
                     UPDATE collection_officer.processorders
                     SET
@@ -1442,6 +1521,41 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                     }),
                   );
 
+                  // Helper: curDlvrCharge update promise
+                  const makeDeliveryChargePromise = (
+                    label,
+                    { processOrderId, orderId, newDeliveryCharge },
+                  ) =>
+                    new Promise((resolve, reject) => {
+                      connection.query(
+                        `UPDATE collection_officer.processorders SET curDlvrCharge = ? WHERE id = ?`,
+                        [newDeliveryCharge, processOrderId],
+                        (err, result) => {
+                          if (err) {
+                            console.error(
+                              `[${label} curDlvrCharge update] FAILED for processOrderId ${processOrderId}:`,
+                              err.message,
+                            );
+                            return reject(err);
+                          }
+                          if (result.affectedRows === 0) {
+                            console.warn(
+                              `[${label} curDlvrCharge update] ⚠️ No row matched for processorders.id = ${processOrderId}.`,
+                            );
+                          }
+                          resolve({
+                            type: "deliveryCharge",
+                            orderId,
+                            newCharge: newDeliveryCharge,
+                            affectedRows: result.affectedRows,
+                            changedRows: result.changedRows,
+                            result,
+                          });
+                        },
+                      );
+                    });
+
+                  // RETAIL CASH: payment fields
                   if (cashOrderUpdates.length > 0) {
                     const cashProcessOrderIds = cashOrderUpdates.map(
                       (u) => u.processOrderId,
@@ -1493,42 +1607,14 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                       }),
                     );
 
-                    cashDeliveryChargeUpdates.forEach(
-                      ({ processOrderId, orderId, newDeliveryCharge }) => {
-                        updatePromises.push(
-                          new Promise((resolve, reject) => {
-                            connection.query(
-                              `UPDATE collection_officer.processorders SET curDlvrCharge = ? WHERE id = ?`,
-                              [newDeliveryCharge, processOrderId],
-                              (err, result) => {
-                                if (err) {
-                                  console.error(
-                                    `[cash curDlvrCharge update] FAILED for processOrderId ${processOrderId}:`,
-                                    err.message,
-                                  );
-                                  return reject(err);
-                                }
-                                if (result.affectedRows === 0) {
-                                  console.warn(
-                                    `[cash curDlvrCharge update] ⚠️ No row matched for processorders.id = ${processOrderId}.`,
-                                  );
-                                }
-                                resolve({
-                                  type: "deliveryCharge",
-                                  orderId,
-                                  newCharge: newDeliveryCharge,
-                                  affectedRows: result.affectedRows,
-                                  changedRows: result.changedRows,
-                                  result,
-                                });
-                              },
-                            );
-                          }),
-                        );
-                      },
-                    );
+                    cashDeliveryChargeUpdates.forEach((item) => {
+                      updatePromises.push(
+                        makeDeliveryChargePromise("cash", item),
+                      );
+                    });
                   }
 
+                  // RETAIL CARD: payment fields
                   if (cardOrders.length > 0) {
                     const cardOrderIds = cardOrders.map(
                       (o) => o.processOrderId,
@@ -1557,38 +1643,23 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                   cardDeliveryChargeCorrections.forEach(
                     ({ processOrderId, orderId, correctDeliveryCharge }) => {
                       updatePromises.push(
-                        new Promise((resolve, reject) => {
-                          connection.query(
-                            `UPDATE collection_officer.processorders SET curDlvrCharge = ? WHERE id = ?`,
-                            [correctDeliveryCharge, processOrderId],
-                            (err, result) => {
-                              if (err) {
-                                console.error(
-                                  `[Card curDlvrCharge update] FAILED for processOrderId ${processOrderId}:`,
-                                  err.message,
-                                );
-                                return reject(err);
-                              }
-                              if (result.affectedRows === 0) {
-                                console.warn(
-                                  `[Card curDlvrCharge update] ⚠️ No row matched for processorders.id = ${processOrderId} — curDlvrCharge was NOT updated.`,
-                                );
-                              }
-                              resolve({
-                                type: "deliveryCharge",
-                                orderId,
-                                newCharge: correctDeliveryCharge,
-                                affectedRows: result.affectedRows,
-                                changedRows: result.changedRows,
-                                result,
-                              });
-                            },
-                          );
+                        makeDeliveryChargePromise("card", {
+                          processOrderId,
+                          orderId,
+                          newDeliveryCharge: correctDeliveryCharge,
                         }),
                       );
                     },
                   );
 
+                  // WHOLESALE: curDlvrCharge only
+                  wholesaleDeliveryChargeUpdates.forEach((item) => {
+                    updatePromises.push(
+                      makeDeliveryChargePromise("wholesale", item),
+                    );
+                  });
+
+                  // RETAIL CARD: credit balance corrections
                   Object.entries(creditBalanceDeltaByUser).forEach(
                     ([userId, delta]) => {
                       if (delta === 0) return;
@@ -1670,36 +1741,50 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                               );
                             }
 
-                            // Insert customer-facing ordernotfication for "Order Delivered"
+                            // Customer-facing notification for "Order Delivered"
                             db.collectionofficer.query(
                               `SELECT id, invNo FROM collection_officer.processorders WHERE id IN (?)`,
                               [processOrderIds],
                               (errInv, invRows) => {
                                 if (!errInv && invRows && invRows.length > 0) {
-                                  const deliveredNotifValues = invRows.map((row) => [
-                                    row.id,
-                                    'Order Delivered',
-                                    `Your order #${row.invNo}, has been successfully delivered. We hope you're happy with our service and had a great experience. Thank you for choosing us!`,
-                                    0,
-                                    new Date(),
-                                  ]);
+                                  const deliveredNotifValues = invRows.map(
+                                    (row) => [
+                                      row.id,
+                                      "Order Delivered",
+                                      `Your order #${row.invNo}, has been successfully delivered. We hope you're happy with our service and had a great experience. Thank you for choosing us!`,
+                                      0,
+                                      new Date(),
+                                    ],
+                                  );
                                   db.collectionofficer.query(
                                     `INSERT INTO collection_officer.ordernotfication (orderId, Title, message, isRead, createdAt) VALUES ?`,
                                     [deliveredNotifValues],
                                     (errON) => {
                                       if (errON) {
-                                        console.error('[saveSignatureAndUpdateStatusDAO] Failed to insert ordernotfication:', errON.message);
+                                        console.error(
+                                          "[saveSignatureAndUpdateStatusDAO] Failed to insert ordernotfication:",
+                                          errON.message,
+                                        );
                                       }
                                     },
                                   );
 
-                                  // Trigger Polygon mobile application real-time socket & push notification
                                   invRows.forEach((row) => {
-                                    polygonNotificationService.notifyOrderDelivered(row.id, row.invNo).catch(() => { });
-                                    salesdashNotificationService.notifySalesDashOrderDelivered(row.id, row.invNo).catch(() => { });
+                                    polygonNotificationService
+                                      .notifyOrderDelivered(row.id, row.invNo)
+                                      .catch(() => { });
+                                    salesdashNotificationService
+                                      .notifySalesDashOrderDelivered(
+                                        row.id,
+                                        row.invNo,
+                                      )
+                                      .catch(() => { });
                                   });
                                 } else if (errInv) {
-                                  console.error('[saveSignatureAndUpdateStatusDAO] Failed to fetch invNo for ordernotfication:', errInv.message);
+                                  console.error(
+                                    "[saveSignatureAndUpdateStatusDAO] Failed to fetch invNo for ordernotfication:",
+                                    errInv.message,
+                                  );
                                 }
                               },
                             );
@@ -1754,6 +1839,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
                               cashOrdersCount: cashOrders.length,
                               cashOrderBreakdown: cashOrderUpdates,
                               cardOrdersCount: cardOrders.length,
+                              wholesaleOrdersCount: wholesaleOrders.length,
 
                               deliveryChargeCorrections:
                                 cardDeliveryChargeCorrections,
@@ -1799,6 +1885,7 @@ exports.saveSignatureAndUpdateStatusDAO = async (
     });
   });
 };
+
 // Restart Journey DAO
 exports.reStartJourneyDAO = async (driverId, orderIds) => {
   try {
