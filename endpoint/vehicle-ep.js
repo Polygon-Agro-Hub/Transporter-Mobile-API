@@ -10,6 +10,13 @@ const fs = require("fs");
  *     summary: Get supported vehicle types
  *     description: Retrieve list of vehicle types with capacity details from vehicle_type.json asset file.
  *     security: []
+ *     parameters:
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           enum: ["Light Weight Driver", "Heavy Weight Driver"]
+ *         description: Optional category filter to return only light or heavy vehicles
  *     responses:
  *       200:
  *         description: Vehicle types retrieved successfully.
@@ -29,15 +36,15 @@ const fs = require("fs");
  *                   items:
  *                     type: object
  *                     properties:
- *                       id:
- *                         type: string
- *                         example: "Three Wheeler"
- *                       label:
+ *                       name:
  *                         type: string
  *                         example: "Three Wheeler"
  *                       capacity:
+ *                         type: number
+ *                         example: 100
+ *                       category:
  *                         type: string
- *                         example: "500 kg"
+ *                         example: "Light Weight Driver"
  */
 exports.getVehicleTypes = (req, res) => {
   try {
@@ -49,6 +56,13 @@ exports.getVehicleTypes = (req, res) => {
       vehicleTypes = JSON.parse(fileContent);
     } else {
       vehicleTypes = require("../asset/vehicle_type.json");
+    }
+
+    const { category } = req.query;
+    if (category) {
+      vehicleTypes = vehicleTypes.filter(
+        (v) => (v.category || "").toLowerCase() === category.toLowerCase()
+      );
     }
 
     res.set("Cache-Control", "no-cache, no-store, must-revalidate");
