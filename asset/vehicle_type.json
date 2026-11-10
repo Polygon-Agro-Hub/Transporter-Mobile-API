@@ -1,0 +1,5 @@
+[
+  { "id": "Three Wheeler", "label": "Three Wheeler", "capacity": "500 kg" },
+  { "id": "Mahindra Bolero", "label": "Mahindra Bolero", "capacity": "1,200 kg" },
+  { "id": "Dimo Batta", "label": "Dimo Batta", "capacity": "850 kg" }
+]

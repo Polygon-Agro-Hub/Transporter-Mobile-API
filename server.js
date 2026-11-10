@@ -69,6 +69,7 @@ const homeroute = require("./routes/home-routes");
 const healthroute = require("./routes/health-routes");
 const loadroute = require("./routes/load-routes");
 const appversionroute = require("./routes/app-version-routes");
+const vehicleroute = require("./routes/vehicle-routes");
 const setupSwagger = require("./startup/swagger");
 
 // Setup Swagger UI
@@ -83,6 +84,7 @@ app.use(`${BASE_PATH}/api/hold`, holdroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
 app.use(`${BASE_PATH}/api/load`, loadroute);
 app.use(`${BASE_PATH}/api/app-version`, appversionroute);
+app.use(`${BASE_PATH}/api/vehicle-types`, vehicleroute);
 app.use(`${BASE_PATH}`, healthroute);
 
 // Error handling middleware
