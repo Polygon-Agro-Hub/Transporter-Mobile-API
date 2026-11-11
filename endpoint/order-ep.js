@@ -11,6 +11,19 @@ const {
 } = require("../validations/order-validation");
 
 // Assign Driver Order
+// ---- Job role -> allowed buyer type rules ----
+const ROLE_BUYER_RULES = {
+  "light weight driver": { buyerType: "retail", label: "Retail" },
+  "heavy weight driver": { buyerType: "wholesale", label: "Wholesale" },
+};
+
+const normalize = (v) => (v || "").toString().trim().toLowerCase();
+
+// Accepts "Retail", "Retails", "Retails " (trailing space), "Wholesale", etc.
+const buyerTypeMatches = (actual, expected) =>
+  normalize(actual).replace(/s$/, "") === expected;
+
+// Assign Driver Order
 exports.assignDriverOrder = asyncHandler(async (req, res) => {
   if (!req.user || !req.user.id) {
     return res.status(401).json({
@@ -19,7 +32,9 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
     });
   }
 
-  const { error } = assignDriverOrderSchema.validate(req.body, { abortEarly: false });
+  const { error } = assignDriverOrderSchema.validate(req.body, {
+    abortEarly: false,
+  });
   if (error) {
     return res.status(400).json({
       status: "error",
@@ -32,7 +47,8 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
   const { invNo } = req.body;
 
   try {
-    const driverEmpId = await orderDao.GetDriverEmpId(driverId);
+    const { empId: driverEmpId, jobRole } =
+      await orderDao.GetDriverProfile(driverId);
     const orderInfo = await orderDao.GetProcessOrderInfoByInvNo(invNo);
     const assignmentCheck = await orderDao.CheckOrderAlreadyAssigned(
       orderInfo.id,
@@ -40,14 +56,13 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
     );
 
     if (assignmentCheck.isAssigned) {
-      // Return specific error messages based on assignment
       if (assignmentCheck.assignedToSameDriver) {
         return res.status(409).json({
           status: "error",
           message: "This order is already in your target list.",
           driverEmpId: driverEmpId,
-          currentStatus: orderInfo.status,  // ADDED
-          invNo: orderInfo.invNo,           // ADDED
+          currentStatus: orderInfo.status,
+          invNo: orderInfo.invNo,
         });
       } else {
         return res.status(409).json({
@@ -55,11 +70,31 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
           message: `This order has already been collected by another officer (Officer ID: ${assignmentCheck.assignedDriverEmpId}).`,
           assignedDriverEmpId: assignmentCheck.assignedDriverEmpId,
           assignedDriverName: assignmentCheck.assignedDriverName,
-          currentStatus: orderInfo.status,  // ADDED
-          invNo: orderInfo.invNo,           // ADDED
+          currentStatus: orderInfo.status,
+          invNo: orderInfo.invNo,
         });
       }
     }
+
+    // ---- Job role vs buyer type check ----
+    const rule = ROLE_BUYER_RULES[normalize(jobRole)];
+
+    if (!rule) {
+      return res.status(403).json({
+        status: "error",
+        message: "Your job role is not allowed to scan delivery orders.",
+        invNo: orderInfo.invNo,
+      });
+    }
+
+    if (!buyerTypeMatches(orderInfo.buyerType, rule.buyerType)) {
+      return res.status(403).json({
+        status: "error",
+        message: `This is a ${orderInfo.buyerType ? orderInfo.buyerType.toString().trim() : "non-matching"} order. You are not authorized to deliver ${orderInfo.buyerType ? orderInfo.buyerType.toString().trim() : "non-matching"} orders.`,
+        invNo: orderInfo.invNo,
+      });
+    }
+    // ---- End check ----
 
     if (orderInfo.status !== "Out For Delivery") {
       return res.status(400).json({
@@ -71,13 +106,7 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
       });
     }
 
-    const handOverTime = new Date();
-    handOverTime.setHours(handOverTime.getHours() + 24);
-    const result = await orderDao.SaveDriverOrder(
-      driverId,
-      orderInfo.id,
-      handOverTime,
-    );
+    const result = await orderDao.SaveDriverOrder(driverId, orderInfo.id);
 
     res.status(201).json({
       status: "success",
@@ -91,9 +120,8 @@ exports.assignDriverOrder = asyncHandler(async (req, res) => {
   } catch (error) {
     console.error("Error assigning driver order:", error.message);
 
-    // Determine appropriate status code
     let statusCode = 500;
-    let errorMessage = error.message;
+    const errorMessage = error.message;
 
     if (error.message.includes("not found")) {
       statusCode = 404;

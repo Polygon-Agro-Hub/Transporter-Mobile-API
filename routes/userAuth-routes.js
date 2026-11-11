@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middlewares/auth.middleware');
 const userAuthEp = require('../endpoint/userAuth-ep');
+const vehicleEp = require('../endpoint/vehicle-ep');
 const { upload } = require('../middlewares/multer.middleware');
 const loginRateLimiter = require('../middlewares/rateLimiter.middleware');
 
@@ -371,5 +372,21 @@ router.post('/refresh-rejected-cache', userAuthEp.refreshRejectedOfficersCache);
  *         description: List of cached rejected IDs.
  */
 router.get('/rejected-officers-cache', userAuthEp.getRejectedOfficersCache);
+
+/**
+ * @openapi
+ * /api/auth/vehicle-types:
+ *   get:
+ *     tags:
+ *       - Auth
+ *       - Vehicle
+ *     summary: Get supported vehicle types
+ *     description: Retrieve list of vehicle types with capacity details from vehicle_type.json asset file.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Vehicle types retrieved successfully.
+ */
+router.get('/vehicle-types', vehicleEp.getVehicleTypes);
 
 module.exports = router;
