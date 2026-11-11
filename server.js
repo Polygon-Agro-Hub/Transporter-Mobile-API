@@ -91,11 +91,16 @@ app.use(`${BASE_PATH}`, healthroute);
 app.use((err, req, res, next) => {
   if (
     err.name === "MulterError" ||
-    (err.message && err.message.includes("supported"))
+    (err.message && err.message.includes("supported")) ||
+    (err.message && err.message.includes("allowed"))
   ) {
+    let msg = err.message;
+    if (err.code === "LIMIT_FILE_SIZE") {
+      msg = "Image file size exceeds the 10MB limit.";
+    }
     return res.status(400).json({
       status: "error",
-      message: err.message,
+      message: msg,
     });
   }
   console.error(err.stack);
