@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middlewares/auth.middleware');
 const userAuthEp = require('../endpoint/userAuth-ep');
+const vehicleEp = require('../endpoint/vehicle-ep');
 const { upload } = require('../middlewares/multer.middleware');
 const loginRateLimiter = require('../middlewares/rateLimiter.middleware');
 
@@ -371,5 +372,89 @@ router.post('/refresh-rejected-cache', userAuthEp.refreshRejectedOfficersCache);
  *         description: List of cached rejected IDs.
  */
 router.get('/rejected-officers-cache', userAuthEp.getRejectedOfficersCache);
+
+/**
+ * @openapi
+ * /api/auth/vehicle-types:
+ *   get:
+ *     tags:
+ *       - Auth
+ *       - Vehicle
+ *     summary: Get supported vehicle types
+ *     description: Retrieve list of vehicle types with capacity details from vehicle_type.json asset file.
+ *     security: []
+ *     responses:
+ *       200:
+ *         description: Vehicle types retrieved successfully.
+ */
+router.get('/vehicle-types', vehicleEp.getVehicleTypes);
+
+/**
+ * @openapi
+ * /api/auth/upload-doc:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Upload Driver Document or Photo
+ *     description: Uploads a driver registration document/photo (JPEG, PNG, HEIC, PDF) to Cloudflare R2 and returns the public URL.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - file
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: Document image or PDF (max 10MB)
+ *               category:
+ *                 type: string
+ *                 enum: [profile, license, insurance, vehicle, documents]
+ *                 default: documents
+ *     responses:
+ *       200:
+ *         description: Document uploaded successfully.
+ *       400:
+ *         description: No file uploaded or unsupported format.
+ *       500:
+ *         description: Storage upload failed.
+ */
+router.post('/upload-doc', upload.single('file'), userAuthEp.uploadRegistrationDoc);
+
+/**
+ * @openapi
+ * /api/auth/register-driver:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Register New Driver
+ *     description: Submit new driver registration. Inserts record into collectionofficer and vehicleregistration with status 'Not Approved'.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - personal
+ *               - residential
+ *               - bank
+ *               - license
+ *               - insurance
+ *               - vehicle
+ *     responses:
+ *       201:
+ *         description: Driver application submitted successfully.
+ *       400:
+ *         description: Validation error or duplicate NIC / phone.
+ *       500:
+ *         description: Database error.
+ */
+router.post('/register-driver', loginRateLimiter, userAuthEp.registerDriver);
 
 module.exports = router;

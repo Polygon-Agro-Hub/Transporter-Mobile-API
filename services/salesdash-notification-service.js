@@ -13,7 +13,9 @@ const getSalesDashBaseUrl = () => {
   return url.replace(/\/+$/, "");
 };
 
-const { SALESDASH_TRIGGER_SECRET } = require("../constants/notification-secrets");
+const {
+  SALESDASH_TRIGGER_SECRET,
+} = require("../constants/notification-secrets");
 
 const getServiceHeaders = () => {
   const secret = SALESDASH_TRIGGER_SECRET;
@@ -42,13 +44,16 @@ const resolveSalesAgentId = async (orderId) => {
        WHERE po.id = ? OR po.orderId = ? OR o.id = ?
        ORDER BY (po.id = ?) DESC
        LIMIT 1`,
-      [orderId, orderId, orderId, orderId]
+      [orderId, orderId, orderId, orderId],
     );
     if (rows && rows.length > 0 && rows[0].salesAgent) {
       return rows[0].salesAgent;
     }
   } catch (err) {
-    console.warn("[SalesDash Notification] DB resolveSalesAgentId error:", err.message);
+    console.warn(
+      "[SalesDash Notification] DB resolveSalesAgentId error:",
+      err.message,
+    );
   }
   return null;
 };
@@ -66,7 +71,9 @@ const triggerSalesDashNotification = async ({
   skipDbInsert = true,
 }) => {
   if (!orderId) {
-    console.warn("[SalesDash Notification] orderId is required to trigger notification.");
+    console.warn(
+      "[SalesDash Notification] orderId is required to trigger notification.",
+    );
     return false;
   }
 
@@ -78,7 +85,7 @@ const triggerSalesDashNotification = async ({
 
   if (!salesAgentId) {
     console.log(
-      `ℹ️ [SalesDash Notification] Order ${orderId} is not assigned to any Sales Agent. Skipping.`
+      `ℹ️ [SalesDash Notification] Order ${orderId} is not assigned to any Sales Agent. Skipping.`,
     );
     return true;
   }
@@ -103,13 +110,13 @@ const triggerSalesDashNotification = async ({
     });
 
     console.log(
-      `📢 [SalesDash Socket] Dispatched "${title}" to Sales Agent ${salesAgentId} for order ${orderId} (Status: ${response.status})`
+      `📢 [SalesDash Socket] Dispatched "${title}" to Sales Agent ${salesAgentId} for order ${orderId} (Status: ${response.status})`,
     );
     return true;
   } catch (err) {
     console.warn(
       `⚠️ [SalesDash Socket] Could not dispatch notification to Sales Dash API (${url}) for order ${orderId}:`,
-      err.response?.data?.message || err.message
+      err.response?.data?.message || err.message,
     );
     return false;
   }
