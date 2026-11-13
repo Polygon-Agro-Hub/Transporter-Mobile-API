@@ -15,7 +15,7 @@ const server = http.createServer(app);
 // Initialize Socket.IO
 const io = initSocket(server);
 
-// Base path for the API
+// Base path
 const BASE_PATH = "/transporter";
 
 // CORS configuration
