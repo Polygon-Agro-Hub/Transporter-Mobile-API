@@ -97,4 +97,42 @@ describe('Home Endpoints', () => {
       expect(homeDao.handOverCash).toHaveBeenCalledWith([{ id: 1, amount: 100 }, { id: 2, amount: 200 }], 10);
     });
   });
+
+  describe('getCentreLocation', () => {
+    it('should return 401 if unauthorized', async () => {
+      req = mockRequest({}, null);
+      await homeEp.getCentreLocation(req, res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('should return 404 if no centre assigned', async () => {
+      req = mockRequest({}, { id: 1 });
+      homeDao.getDriverCenterLocation.mockResolvedValue(null);
+
+      await homeEp.getCentreLocation(req, res);
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('should return 200 with centre location details', async () => {
+      req = mockRequest({}, { id: 1 });
+      const mockCentre = {
+        officerId: 1,
+        centerId: 5,
+        centerName: 'Colombo Collection Centre',
+        formattedAddress: 'No 10, Galle Road, Colombo, Sri Lanka',
+        latitude: 6.9271,
+        longitude: 79.8612,
+      };
+      homeDao.getDriverCenterLocation.mockResolvedValue(mockCentre);
+
+      await homeEp.getCentreLocation(req, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'success',
+          data: mockCentre,
+        })
+      );
+    });
+  });
 });

@@ -489,5 +489,199 @@ exports.getOfficerDetailsDao = async ({ id, empId } = {}) => {
   }
 };
 
+/**
+ * Check if a driver with the given NIC or phone number already exists.
+ */
+exports.checkDriverExists = async (nic, phone) => {
+  try {
+    const cleanNic = (nic || "").trim().toUpperCase();
+    const cleanPhone = (phone || "").replace(/\s+/g, "").replace(/^0+/, "");
+
+    const sql = `
+      SELECT id, empId, nic, phoneNumber01 
+      FROM collectionofficer 
+      WHERE (nic = ? AND ? != '') 
+         OR (phoneNumber01 = ? AND ? != '')
+      LIMIT 1
+    `;
+    const [rows] = await db.collectionofficer
+      .promise()
+      .query(sql, [cleanNic, cleanNic, cleanPhone, cleanPhone]);
+    return rows.length > 0 ? rows[0] : null;
+  } catch (err) {
+    console.error("Database error in checkDriverExists:", err.message);
+    throw err;
+  }
+};
+
+/**
+ * Register a new driver with status 'Not Approved'.
+ * Does NOT generate a driver employee ID (empId remains NULL until admin approves and assigns one).
+ * Submits the company as Distribution Polygon Holdings Company (companyId: 2).
+ * Inserts into collectionofficer and vehicleregistration in an atomic transaction.
+ */
+const DISTRIBUTION_POLYGON_HOLDINGS_COMPANY_ID = 2;
+
+exports.registerDriverDao = async (data) => {
+  const connection = await db.collectionofficer.promise().getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // 1. Prepare collectionofficer row
+    // Password and empId remain NULL upon registration.
+    // The admin sets/generates the initial password and assigns an empId upon approval,
+    // and sends those credentials directly to the driver to log in.
+    const personal = data.personal || {};
+    const residential = data.residential || {};
+    const bank = data.bank || {};
+    const license = data.license || {};
+    const insurance = data.insurance || {};
+    const vehicle = data.vehicle || {};
+
+    const languagesStr = Array.isArray(personal.languages)
+      ? personal.languages.join(", ")
+      : personal.languages || "English";
+
+    const insertOfficerSql = `
+      INSERT INTO collectionofficer (
+        companyId,
+        empId,
+        firstNameEnglish,
+        lastNameEnglish,
+        phoneCode01,
+        phoneNumber01,
+        phoneCode02,
+        phoneNumber02,
+        nic,
+        email,
+        password,
+        passwordUpdated,
+        jobRole,
+        houseNumber,
+        streetName,
+        city,
+        district,
+        province,
+        country,
+        languages,
+        accHolderName,
+        accNumber,
+        bankName,
+        branchName,
+        image,
+        status,
+        claimStatus,
+        onlineStatus,
+        createdAt
+      ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NOW())
+    `;
+
+    const officerParams = [
+      DISTRIBUTION_POLYGON_HOLDINGS_COMPANY_ID,
+      (personal.firstName || "").trim(),
+      (personal.lastName || "").trim(),
+      "+94",
+      (personal.phone1 || "").replace(/\s+/g, "").replace(/^0+/, ""),
+      personal.phone2 ? "+94" : null,
+      personal.phone2 ? personal.phone2.replace(/\s+/g, "").replace(/^0+/, "") : null,
+      (personal.nic || "").trim().toUpperCase(),
+      personal.email ? personal.email.trim().toLowerCase() : null,
+      personal.jobRole || "Light Weight Driver",
+      (residential.houseNumber || "").trim(),
+      (residential.streetName || "").trim(),
+      (residential.city || "").trim(),
+      (residential.district || "").trim(),
+      residential.province ? residential.province.trim() : null,
+      residential.country || "Sri Lanka",
+      languagesStr,
+      (bank.bankAccountHolder || "").trim(),
+      (bank.bankAccountNumber || "").trim(),
+      (bank.bankName || "").trim(),
+      (bank.bankBranch || "").trim(),
+      personal.profilePhoto || null,
+      OFFICER_STATUS.NOT_APPROVED,
+    ];
+
+    const [officerResult] = await connection.query(insertOfficerSql, officerParams);
+    const coId = officerResult.insertId;
+    const referenceId = `REG-DRV-${String(coId).padStart(5, "0")}`;
+
+    // 3. Format insurance expiry date for MySQL (YYYY-MM-DD)
+    let formattedExpiryDate = null;
+    if (insurance.insuranceExpiry) {
+      const parts = insurance.insuranceExpiry.split("/");
+      if (parts.length === 3) {
+        formattedExpiryDate = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+      } else if (insurance.insuranceExpiry.includes("-")) {
+        formattedExpiryDate = insurance.insuranceExpiry.split("T")[0];
+      }
+    }
+
+    // 4. Parse capacity
+    let capacityNum = 0;
+    if (typeof vehicle.vehicleCapacity === "number") {
+      capacityNum = vehicle.vehicleCapacity;
+    } else if (vehicle.vehicleCapacity) {
+      capacityNum = parseInt(String(vehicle.vehicleCapacity).replace(/[^0-9]/g, ""), 10) || 0;
+    }
+
+    // 5. Insert vehicleregistration row
+    const insertVehicleSql = `
+      INSERT INTO vehicleregistration (
+        coId,
+        licNo,
+        insNo,
+        insExpDate,
+        vType,
+        vCapacity,
+        vRegNo,
+        licFrontImg,
+        licBackImg,
+        insFrontImg,
+        insBackImg,
+        vehFrontImg,
+        vehBackImg,
+        vehSideImgA,
+        vehSideImgB
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const vehicleParams = [
+      coId,
+      (license.licenseNumber || "").trim().toUpperCase(),
+      (insurance.insurancePolicyNumber || "").trim(),
+      formattedExpiryDate,
+      (vehicle.vehicleType || "").trim(),
+      capacityNum,
+      (vehicle.vehicleNumber || "").trim().toUpperCase(),
+      license.licenseFrontPhoto || null,
+      license.licenseBackPhoto || null,
+      insurance.insuranceFrontPhoto || null,
+      insurance.insuranceBackPhoto || null,
+      vehicle.vehicleFrontPhoto || null,
+      vehicle.vehicleBackPhoto || null,
+      vehicle.vehicleLeftSidePhoto || null,
+      vehicle.vehicleRightSidePhoto || null,
+    ];
+
+    await connection.query(insertVehicleSql, vehicleParams);
+
+    await connection.commit();
+
+    return {
+      coId,
+      referenceId,
+      empId: null,
+      status: OFFICER_STATUS.NOT_APPROVED,
+    };
+  } catch (error) {
+    await connection.rollback();
+    console.error("Database error in registerDriverDao:", error);
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
 
 
