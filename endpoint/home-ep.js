@@ -349,3 +349,38 @@ exports.getLatestTransactionStatus = asyncHandler(async (req, res) => {
   }
 });
 
+exports.getCentreLocation = asyncHandler(async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: "error",
+      message: "Unauthorized: User authentication required",
+    });
+  }
+
+  const driverId = req.user.id;
+
+  try {
+    const centre = await homeDao.getDriverCenterLocation(driverId);
+
+    if (!centre || (!centre.centerId && !centre.distributedCenterId)) {
+      return res.status(404).json({
+        status: "error",
+        message: "No collection centre assigned for this officer",
+      });
+    }
+
+    res.status(200).json({
+      status: "success",
+      message: "Centre location fetched successfully",
+      data: centre,
+    });
+  } catch (error) {
+    console.error("Error fetching centre location:", error.message);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to fetch centre location. Please try again.",
+    });
+  }
+});
+
+

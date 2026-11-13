@@ -105,65 +105,60 @@ exports.getAmount = async (driverId) => {
             result.todayReturnOrders = retResults[0]?.todayReturnOrders || 0;
           }
 
-          const allLocationsSql = `
-          SELECT 
-            locations.locationKey,
-            locations.processOrderId,
-            do.drvStatus,
-            CASE 
-              WHEN do.drvStatus IN ('Return', 'Return Received') THEN (
-                SELECT DATE(CONVERT_TZ(dro.createdAt, '+00:00', '+05:30'))
-                FROM collection_officer.driverreturnorders dro
-                WHERE dro.drvOrderId = do.id
-                ORDER BY dro.createdAt DESC
-                LIMIT 1
-              )
-              ELSE DATE(CONVERT_TZ(po.deliveredTime, '+00:00', '+05:30'))
-            END as deliveredDate,
-            CURDATE() as today
-          FROM (
-            SELECT 
-              CONCAT(oh.houseNo, '-', oh.streetName, '-', oh.city) as locationKey,
-              po.id as processOrderId,
-              po.orderId as ordersId
-            FROM collection_officer.driverorders do
-            INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-            INNER JOIN collection_officer.processorders po ON do.orderId = po.id
-            INNER JOIN collection_officer.orders o ON po.orderId = o.id
-            INNER JOIN collection_officer.orderhouse oh ON o.id = oh.orderId
-            WHERE 
-              dom.driverId = ?
-              AND dom.isHandOver = 0
-              AND o.buildingType = 'House'
-            
-            UNION ALL
-            
-            SELECT 
-              CONCAT(oa.buildingNo, '-', oa.buildingName, '-', oa.streetName, '-', oa.city) as locationKey,
-              po.id as processOrderId,
-              po.orderId as ordersId
-            FROM collection_officer.driverorders do
-            INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
-            INNER JOIN collection_officer.processorders po ON do.orderId = po.id
-            INNER JOIN collection_officer.orders o ON po.orderId = o.id
-            INNER JOIN collection_officer.orderapartment oa ON o.id = oa.orderId
-            WHERE 
-              dom.driverId = ?
-              AND dom.isHandOver = 0
-              AND o.buildingType = 'Apartment'
-          ) as locations
-          INNER JOIN collection_officer.driverorders do ON locations.processOrderId = do.orderId
-          INNER JOIN collection_officer.processorders po ON do.orderId = po.id
-          ORDER BY locations.locationKey, locations.processOrderId
-        `;
+          // Locations use the SAME grouping as getDriverOrdersDAO (userId + address).
+          // Counted in SQL so NULL address parts and timezone issues are handled in one place.
+          const locationCountSql = `
+            SELECT
+              COALESCE(SUM(loc.pendingOrders > 0), 0) AS pendingLocationsCount,
+              COALESCE(SUM(loc.pendingOrders = 0 AND loc.todayFinished > 0), 0) AS todayCompletedLocationsCount
+            FROM (
+              SELECT
+                CONCAT_WS('_',
+                  o.userId,
+                  CASE
+                    WHEN o.buildingType = 'House' THEN
+                      CONCAT_WS('_', 'HOUSE', oh.houseNo, oh.streetName, oh.city)
+                    WHEN o.buildingType = 'Apartment' THEN
+                      CONCAT_WS('_', 'APARTMENT', oa.buildingNo, oa.buildingName,
+                                oa.unitNo, oa.floorNo, oa.streetName, oa.city)
+                    ELSE CONCAT('OTHER_', o.id)
+                  END
+                ) AS locKey,
+                SUM(do.drvStatus IN ('Todo', 'Hold', 'On the way')) AS pendingOrders,
+                SUM(
+                  do.drvStatus IN ('Completed', 'Return', 'Return Received')
+                  AND (
+                    CASE
+                      WHEN do.drvStatus IN ('Return', 'Return Received') THEN (
+                        SELECT DATE(CONVERT_TZ(MAX(dro.createdAt), '+00:00', '+05:30'))
+                        FROM collection_officer.driverreturnorders dro
+                        WHERE dro.drvOrderId = do.id
+                      )
+                      ELSE DATE(CONVERT_TZ(po.deliveredTime, '+00:00', '+05:30'))
+                    END
+                  ) = DATE(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
+                ) AS todayFinished
+              FROM collection_officer.driverorders do
+              INNER JOIN collection_officer.driverordermain dom ON do.drvOrderMainId = dom.id
+              INNER JOIN collection_officer.processorders po ON do.orderId = po.id
+              INNER JOIN collection_officer.orders o ON po.orderId = o.id
+              LEFT JOIN collection_officer.orderhouse oh
+                ON o.id = oh.orderId AND o.buildingType = 'House'
+              LEFT JOIN collection_officer.orderapartment oa
+                ON o.id = oa.orderId AND o.buildingType = 'Apartment'
+              WHERE dom.driverId = ?
+                AND dom.isHandOver = 0
+              GROUP BY locKey
+            ) loc
+          `;
 
           db.collectionofficer.query(
-            allLocationsSql,
-            [driverId, driverId],
+            locationCountSql,
+            [driverId],
             (allErr, allResults) => {
               if (allErr) {
                 console.error(
-                  "Database error fetching all locations:",
+                  "Database error fetching location counts:",
                   allErr.message,
                 );
                 result.pendingLocationsCount = 0;
@@ -175,67 +170,10 @@ exports.getAmount = async (driverId) => {
                 return;
               }
 
-              const locationMap = new Map();
-
-              allResults.forEach((row) => {
-                if (!locationMap.has(row.locationKey)) {
-                  locationMap.set(row.locationKey, {
-                    locationKey: row.locationKey,
-                    orders: [],
-                  });
-                }
-                locationMap.get(row.locationKey).orders.push({
-                  orderId: row.processOrderId,
-                  drvStatus: row.drvStatus,
-                  deliveredDate: row.deliveredDate,
-                  today: row.today,
-                });
-              });
-
-              let pendingLocationsCount = 0;
-              let todayCompletedLocationsCount = 0;
-
-              locationMap.forEach((location) => {
-                const orders = location.orders;
-                const totalOrders = orders.length;
-
-                const todayDate = orders[0]?.today;
-
-                const pendingOrders = orders.filter((o) =>
-                  ["Todo", "Hold", "On the way"].includes(o.drvStatus),
-                ).length;
-
-                const todayFinishedOrders = orders.filter((o) => {
-                  const isFinished = [
-                    "Completed",
-                    "Return",
-                    "Return Received",
-                  ].includes(o.drvStatus);
-                  if (!isFinished || !o.deliveredDate || !todayDate)
-                    return false;
-
-                  const orderDate = new Date(o.deliveredDate).toDateString();
-                  const todayDateStr = new Date(todayDate).toDateString();
-
-                  return orderDate === todayDateStr;
-                }).length;
-
-                if (pendingOrders > 0) {
-                  pendingLocationsCount++;
-                }
-
-                if (
-                  totalOrders > 0 &&
-                  pendingOrders === 0 &&
-                  todayFinishedOrders > 0
-                ) {
-                  todayCompletedLocationsCount++;
-                }
-              });
-
-              result.pendingLocationsCount = pendingLocationsCount;
+              result.pendingLocationsCount =
+                Number(allResults[0]?.pendingLocationsCount) || 0;
               result.todayCompletedLocationsCount =
-                todayCompletedLocationsCount;
+                Number(allResults[0]?.todayCompletedLocationsCount) || 0;
 
               const txSql = `
                 SELECT tx.transStatus 
@@ -354,6 +292,110 @@ exports.getDriverDistributedCenter = async (driverId) => {
       }
 
       resolve(results.length > 0 ? results[0] : null);
+    });
+  });
+};
+
+exports.getDriverCenterLocation = async (driverId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT 
+        co.id AS officerId,
+        co.centerId,
+        co.distributedCenterId,
+        -- collectioncenter (from centerId)
+        cc.id AS collectionCenterId,
+        cc.regCode AS ccRegCode,
+        cc.centerName AS ccCenterName,
+        cc.code1 AS ccCode1,
+        cc.contact01 AS ccContact01,
+        cc.code2 AS ccCode2,
+        cc.contact02 AS ccContact02,
+        cc.buildingNumber AS ccBuildingNumber,
+        cc.street AS ccStreet,
+        cc.city AS ccCity,
+        cc.district AS ccDistrict,
+        cc.province AS ccProvince,
+        cc.country AS ccCountry,
+        -- distributedcenter (from distributedCenterId)
+        dc.id AS dcId,
+        dc.centerName AS dcCenterName,
+        dc.city AS dcCity,
+        dc.district AS dcDistrict,
+        dc.province AS dcProvince,
+        dc.country AS dcCountry,
+        dc.latitude AS dcLatitude,
+        dc.longitude AS dcLongitude
+      FROM collection_officer.collectionofficer co
+      LEFT JOIN collection_officer.collectioncenter cc ON co.centerId = cc.id
+      LEFT JOIN collection_officer.distributedcenter dc ON co.distributedCenterId = dc.id
+      WHERE co.id = ?
+      LIMIT 1
+    `;
+
+    db.collectionofficer.query(sql, [driverId], (err, results) => {
+      if (err) {
+        console.error(
+          "Database error getting driver center location:",
+          err.message,
+        );
+        return reject(new Error("Failed to retrieve driver centre location"));
+      }
+
+      if (!results || results.length === 0) {
+        return resolve(null);
+      }
+
+      const row = results[0];
+
+      // Prioritize distributedcenter (co.distributedCenterId -> distributedcenter)
+      const centerName = row.dcCenterName || row.ccCenterName || "Distribution Centre";
+      const city = row.dcCity || row.ccCity || null;
+      const district = row.dcDistrict || row.ccDistrict || null;
+      const province = row.dcProvince || row.ccProvince || null;
+      const country = row.dcCountry || row.ccCountry || "Sri Lanka";
+
+      const latitude =
+        row.dcLatitude != null && row.dcLatitude !== ""
+          ? parseFloat(row.dcLatitude)
+          : null;
+      const longitude =
+        row.dcLongitude != null && row.dcLongitude !== ""
+          ? parseFloat(row.dcLongitude)
+          : null;
+
+      const buildingNumber = row.ccBuildingNumber || null;
+      const street = row.ccStreet || null;
+
+      const addressParts = [
+        buildingNumber,
+        street,
+        city,
+        district,
+        province,
+        country,
+      ].filter(Boolean);
+      const formattedAddress = addressParts.join(", ");
+
+      resolve({
+        officerId: row.officerId,
+        distributedCenterId: row.distributedCenterId,
+        centerId: row.distributedCenterId || row.centerId,
+        collectionCenterId: row.collectionCenterId,
+        regCode: row.ccRegCode || null,
+        centerName,
+        buildingNumber,
+        street,
+        city,
+        district,
+        province,
+        country,
+        latitude,
+        longitude,
+        formattedAddress,
+        contact01: row.ccContact01 || null,
+        contact02: row.ccContact02 || null,
+      });
     });
   });
 };

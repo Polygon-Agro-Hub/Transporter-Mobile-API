@@ -1,6 +1,10 @@
 const userDao = require("../dao/userAuth-dao");
 const jwt = require("jsonwebtoken");
-const { loginSchema, changePasswordSchema } = require("../validations/userAuth-validations");
+const {
+  loginSchema,
+  changePasswordSchema,
+  registerDriverSchema,
+} = require("../validations/userAuth-validations");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
 const { OFFICER_STATUS } = require("../constants/officer-status");
@@ -409,5 +413,96 @@ exports.getRejectedOfficersCache = asyncHandler(async (req, res) => {
     count: rejectedIds.length,
     rejectedIds,
   });
+});
+
+// Upload Registration Document / Photo to Cloudflare R2
+exports.uploadRegistrationDoc = asyncHandler(async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "No document file was uploaded",
+      });
+    }
+
+    const category = (req.body.category || "documents").replace(/[^a-z0-9_-]/gi, "");
+    const keyPrefix = `drivers/${category}`;
+
+    const fileUrl = await uploadFileToS3(
+      req.file.buffer,
+      req.file.originalname,
+      keyPrefix
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Document uploaded successfully",
+      data: {
+        url: fileUrl,
+        fileName: req.file.originalname,
+      },
+    });
+  } catch (error) {
+    console.error("Error in uploadRegistrationDoc:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to upload document",
+      error: error.message,
+    });
+  }
+});
+
+// Register New Driver Application
+exports.registerDriver = asyncHandler(async (req, res) => {
+  const { error } = registerDriverSchema.validate(req.body, { abortEarly: false });
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      message: "Validation error",
+      errors: error.details.map((err) => err.message),
+    });
+  }
+
+  const { personal } = req.body;
+  const cleanPhone = (personal.phone1 || "").replace(/\s+/g, "");
+  const cleanNic = (personal.nic || "").trim().toUpperCase();
+
+  // Check if NIC or Phone is already registered
+  const existing = await userDao.checkDriverExists(cleanNic, cleanPhone);
+  if (existing) {
+    if (existing.nic === cleanNic) {
+      return res.status(400).json({
+        success: false,
+        message: "An account with this National Identity Card (NIC) is already registered.",
+      });
+    }
+    if (existing.phoneNumber01 === cleanPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "An account with this phone number is already registered.",
+      });
+    }
+  }
+
+  try {
+    const result = await userDao.registerDriverDao(req.body);
+
+    return res.status(201).json({
+      success: true,
+      message: "Driver application submitted successfully",
+      data: {
+        referenceId: result.referenceId,
+        coId: result.coId,
+        status: result.status,
+      },
+    });
+  } catch (err) {
+    console.error("Error registering driver:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to submit driver registration. Please try again.",
+      error: err.message,
+    });
+  }
 });
 
