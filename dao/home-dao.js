@@ -296,6 +296,110 @@ exports.getDriverDistributedCenter = async (driverId) => {
   });
 };
 
+exports.getDriverCenterLocation = async (driverId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT 
+        co.id AS officerId,
+        co.centerId,
+        co.distributedCenterId,
+        -- collectioncenter (from centerId)
+        cc.id AS collectionCenterId,
+        cc.regCode AS ccRegCode,
+        cc.centerName AS ccCenterName,
+        cc.code1 AS ccCode1,
+        cc.contact01 AS ccContact01,
+        cc.code2 AS ccCode2,
+        cc.contact02 AS ccContact02,
+        cc.buildingNumber AS ccBuildingNumber,
+        cc.street AS ccStreet,
+        cc.city AS ccCity,
+        cc.district AS ccDistrict,
+        cc.province AS ccProvince,
+        cc.country AS ccCountry,
+        -- distributedcenter (from distributedCenterId)
+        dc.id AS dcId,
+        dc.centerName AS dcCenterName,
+        dc.city AS dcCity,
+        dc.district AS dcDistrict,
+        dc.province AS dcProvince,
+        dc.country AS dcCountry,
+        dc.latitude AS dcLatitude,
+        dc.longitude AS dcLongitude
+      FROM collection_officer.collectionofficer co
+      LEFT JOIN collection_officer.collectioncenter cc ON co.centerId = cc.id
+      LEFT JOIN collection_officer.distributedcenter dc ON co.distributedCenterId = dc.id
+      WHERE co.id = ?
+      LIMIT 1
+    `;
+
+    db.collectionofficer.query(sql, [driverId], (err, results) => {
+      if (err) {
+        console.error(
+          "Database error getting driver center location:",
+          err.message,
+        );
+        return reject(new Error("Failed to retrieve driver centre location"));
+      }
+
+      if (!results || results.length === 0) {
+        return resolve(null);
+      }
+
+      const row = results[0];
+
+      // Prioritize distributedcenter (co.distributedCenterId -> distributedcenter)
+      const centerName = row.dcCenterName || row.ccCenterName || "Distribution Centre";
+      const city = row.dcCity || row.ccCity || null;
+      const district = row.dcDistrict || row.ccDistrict || null;
+      const province = row.dcProvince || row.ccProvince || null;
+      const country = row.dcCountry || row.ccCountry || "Sri Lanka";
+
+      const latitude =
+        row.dcLatitude != null && row.dcLatitude !== ""
+          ? parseFloat(row.dcLatitude)
+          : null;
+      const longitude =
+        row.dcLongitude != null && row.dcLongitude !== ""
+          ? parseFloat(row.dcLongitude)
+          : null;
+
+      const buildingNumber = row.ccBuildingNumber || null;
+      const street = row.ccStreet || null;
+
+      const addressParts = [
+        buildingNumber,
+        street,
+        city,
+        district,
+        province,
+        country,
+      ].filter(Boolean);
+      const formattedAddress = addressParts.join(", ");
+
+      resolve({
+        officerId: row.officerId,
+        distributedCenterId: row.distributedCenterId,
+        centerId: row.distributedCenterId || row.centerId,
+        collectionCenterId: row.collectionCenterId,
+        regCode: row.ccRegCode || null,
+        centerName,
+        buildingNumber,
+        street,
+        city,
+        district,
+        province,
+        country,
+        latitude,
+        longitude,
+        formattedAddress,
+        contact01: row.ccContact01 || null,
+        contact02: row.ccContact02 || null,
+      });
+    });
+  });
+};
+
 exports.getOfficerByEmpId = async (empId) => {
   return new Promise((resolve, reject) => {
     const sql = `
