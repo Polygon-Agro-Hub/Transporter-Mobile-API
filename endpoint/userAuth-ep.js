@@ -452,6 +452,17 @@ exports.uploadRegistrationDoc = asyncHandler(async (req, res) => {
   }
 });
 
+// Check for existing records in DB (phone1, phone2, email, nic, license, insurance, vehicle)
+exports.checkExistingRecords = asyncHandler(async (req, res) => {
+  const duplicates = await userDao.checkExistingRecordsDao(req.body || {});
+  const hasDuplicates = Object.keys(duplicates).length > 0;
+  return res.status(200).json({
+    success: true,
+    hasDuplicates,
+    duplicates,
+  });
+});
+
 // Register New Driver Application
 exports.registerDriver = asyncHandler(async (req, res) => {
   const { error } = registerDriverSchema.validate(req.body, { abortEarly: false });
@@ -464,24 +475,45 @@ exports.registerDriver = asyncHandler(async (req, res) => {
   }
 
   const { personal } = req.body;
-  const cleanPhone = (personal.phone1 || "").replace(/\s+/g, "");
+  const cleanPhone = (personal.phone1 || "").replace(/\s+/g, "").replace(/^0+/, "");
+  const cleanPhone2 = (personal.phone2 || "").replace(/\s+/g, "").replace(/^0+/, "");
   const cleanNic = (personal.nic || "").trim().toUpperCase();
 
-  // Check if NIC or Phone is already registered
-  const existing = await userDao.checkDriverExists(cleanNic, cleanPhone);
-  if (existing) {
-    if (existing.nic === cleanNic) {
-      return res.status(400).json({
-        success: false,
-        message: "An account with this National Identity Card (NIC) is already registered.",
-      });
-    }
-    if (existing.phoneNumber01 === cleanPhone) {
-      return res.status(400).json({
-        success: false,
-        message: "An account with this phone number is already registered.",
-      });
-    }
+  if (cleanPhone2 && cleanPhone && cleanPhone2 === cleanPhone) {
+    return res.status(400).json({
+      success: false,
+      message: "Phone Number 2 cannot be the same as Phone Number 1",
+    });
+  }
+
+  // Check for any duplicate records in DB (phone1, phone2, email, nic, licenseNumber, insurancePolicyNumber, vehicleNumber)
+  const duplicates = await userDao.checkExistingRecordsDao({
+    phone1: personal.phone1,
+    phone2: personal.phone2,
+    email: personal.email,
+    nic: personal.nic,
+    licenseNumber: req.body.license?.licenseNumber,
+    insurancePolicyNumber: req.body.insurance?.insurancePolicyNumber,
+    vehicleNumber: req.body.vehicle?.vehicleNumber,
+  });
+
+  if (Object.keys(duplicates).length > 0) {
+    const fieldLabels = {
+      phone1: "Phone Number 1",
+      phone2: "Phone Number 2",
+      email: "Email Address",
+      nic: "National Identity Card (NIC)",
+      licenseNumber: "Driving License ID",
+      insurancePolicyNumber: "Insurance Policy Number",
+      vehicleNumber: "Vehicle Registration Number",
+    };
+    const firstKey = Object.keys(duplicates)[0];
+    const label = fieldLabels[firstKey] || firstKey;
+    return res.status(400).json({
+      success: false,
+      message: `${label} is already registered.`,
+      duplicates,
+    });
   }
 
   try {
