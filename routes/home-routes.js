@@ -463,4 +463,67 @@ router.post('/upload-transfer-slip', auth, upload.single('slip'), homeEp.uploadT
  */
 router.get('/get-latest-transaction-status', auth, homeEp.getLatestTransactionStatus);
 
+/**
+ * @openapi
+ * /api/home/get-centre-location:
+ *   get:
+ *     tags:
+ *       - Home
+ *     summary: Get Collection Centre Location
+ *     description: Retrieve the assigned collection centre location details (address, coordinates, name) for the authenticated driver based on centerId in collectionofficer table.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Collection centre location retrieved successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "success"
+ *                 message:
+ *                   type: string
+ *                   example: "Centre location fetched successfully"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     officerId:
+ *                       type: integer
+ *                     centerId:
+ *                       type: integer
+ *                     collectionCenterId:
+ *                       type: integer
+ *                     centerName:
+ *                       type: string
+ *                     buildingNumber:
+ *                       type: string
+ *                     street:
+ *                       type: string
+ *                     city:
+ *                       type: string
+ *                     district:
+ *                       type: string
+ *                     province:
+ *                       type: string
+ *                     country:
+ *                       type: string
+ *                     formattedAddress:
+ *                       type: string
+ *                     latitude:
+ *                       type: number
+ *                     longitude:
+ *                       type: number
+ *       401:
+ *         description: Unauthorized.
+ *       404:
+ *         description: No collection centre assigned.
+ *       500:
+ *         description: Internal server error.
+ */
+router.get('/get-centre-location', auth, homeEp.getCentreLocation);
+router.get('/get-center-location', auth, homeEp.getCentreLocation);
+
 module.exports = router;
