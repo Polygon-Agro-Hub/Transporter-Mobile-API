@@ -490,6 +490,168 @@ exports.getOfficerDetailsDao = async ({ id, empId } = {}) => {
 };
 
 /**
+ * Check if any of the provided fields already exist in the database.
+ * Checks collectionofficer for: phone1, phone2, email, nic.
+ * Checks vehicleregistration for: licenseNumber (licNo), insurancePolicyNumber (insNo), vehicleNumber (vRegNo).
+ * Returns a map of duplicated fields with value "Already registered".
+ */
+exports.checkExistingRecordsDao = async (params = {}) => {
+  try {
+    const duplicates = {};
+
+    const cleanPhone1 = (params.phone1 || "").replace(/\s+/g, "").replace(/^0+/, "");
+    const cleanPhone2 = (params.phone2 || "").replace(/\s+/g, "").replace(/^0+/, "");
+    const cleanEmail = (params.email || "").trim().toLowerCase();
+    const cleanNic = (params.nic || "").trim().toUpperCase();
+
+    const cleanLicense = (params.licenseNumber || "").trim().toUpperCase();
+    const cleanInsurance = (params.insurancePolicyNumber || "").trim();
+    const cleanVehicle = (params.vehicleNumber || "").trim().toUpperCase();
+
+    // Helper to normalize phone numbers for comparison
+    const normalizePhone = (p) =>
+      (p || "").replace(/\s+/g, "").replace(/^\+94/, "").replace(/^94/, "").replace(/^0+/, "");
+
+    // 1. Check collectionofficer table
+    const officerChecks = [];
+    const officerParams = [];
+
+    const addPhoneConditions = (phoneVal) => {
+      officerChecks.push(
+        "(phoneNumber01 IN (?, ?, ?, ?) OR phoneNumber02 IN (?, ?, ?, ?))"
+      );
+      officerParams.push(
+        phoneVal,
+        "0" + phoneVal,
+        "+94" + phoneVal,
+        "94" + phoneVal,
+        phoneVal,
+        "0" + phoneVal,
+        "+94" + phoneVal,
+        "94" + phoneVal
+      );
+    };
+
+    if (cleanPhone1) {
+      addPhoneConditions(cleanPhone1);
+    }
+    if (cleanPhone2) {
+      addPhoneConditions(cleanPhone2);
+    }
+    if (cleanEmail) {
+      officerChecks.push("(LOWER(TRIM(email)) = ?)");
+      officerParams.push(cleanEmail);
+    }
+    if (cleanNic) {
+      officerChecks.push("(UPPER(TRIM(nic)) = ?)");
+      officerParams.push(cleanNic);
+    }
+
+    if (officerChecks.length > 0) {
+      const officerSql = `
+        SELECT id, phoneNumber01, phoneNumber02, email, nic
+        FROM collectionofficer
+        WHERE ${officerChecks.join(" OR ")}
+      `;
+      const [rows] = await db.collectionofficer.promise().query(officerSql, officerParams);
+
+      for (const row of rows) {
+        const rowPhone1 = normalizePhone(row.phoneNumber01);
+        const rowPhone2 = normalizePhone(row.phoneNumber02);
+        const rowEmail = (row.email || "").trim().toLowerCase();
+        const rowNic = (row.nic || "").trim().toUpperCase();
+
+        if (cleanPhone1 && (rowPhone1 === cleanPhone1 || rowPhone2 === cleanPhone1)) {
+          duplicates.phone1 = "Already registered";
+        }
+        if (cleanPhone2 && (rowPhone1 === cleanPhone2 || rowPhone2 === cleanPhone2)) {
+          duplicates.phone2 = "Already registered";
+        }
+        if (cleanEmail && rowEmail && rowEmail === cleanEmail) {
+          duplicates.email = "Already registered";
+        }
+        if (cleanNic && rowNic && rowNic === cleanNic) {
+          duplicates.nic = "Already registered";
+        }
+      }
+    }
+
+    // 2. Check vehicleregistration table
+    const vehicleChecks = [];
+    const vehicleParams = [];
+
+    const normalizeLicense = (l) => (l || "").trim().toUpperCase().replace(/[\s-]/g, "");
+    const normalizeVehicle = (v) => (v || "").trim().toUpperCase().replace(/[\s-]/g, "");
+
+    if (cleanLicense) {
+      const normLic = normalizeLicense(cleanLicense);
+      vehicleChecks.push(
+        "(UPPER(TRIM(licNo)) = ? OR REPLACE(REPLACE(UPPER(TRIM(licNo)), '-', ''), ' ', '') = ?)"
+      );
+      vehicleParams.push(cleanLicense, normLic);
+    }
+    if (cleanInsurance) {
+      const normIns = cleanInsurance.replace(/[\s\/-]/g, "").toUpperCase();
+      vehicleChecks.push(
+        "(TRIM(insNo) = ? OR REPLACE(REPLACE(REPLACE(UPPER(TRIM(insNo)), '-', ''), '/', ''), ' ', '') = ?)"
+      );
+      vehicleParams.push(cleanInsurance, normIns);
+    }
+    if (cleanVehicle) {
+      const normVeh = normalizeVehicle(cleanVehicle);
+      vehicleChecks.push(
+        "(UPPER(TRIM(vRegNo)) = ? OR REPLACE(REPLACE(UPPER(TRIM(vRegNo)), '-', ''), ' ', '') = ?)"
+      );
+      vehicleParams.push(cleanVehicle, normVeh);
+    }
+
+    if (vehicleChecks.length > 0) {
+      const vehicleSql = `
+        SELECT id, licNo, insNo, vRegNo
+        FROM vehicleregistration
+        WHERE ${vehicleChecks.join(" OR ")}
+      `;
+      const [rows] = await db.collectionofficer.promise().query(vehicleSql, vehicleParams);
+
+      for (const row of rows) {
+        const rowLic = (row.licNo || "").trim().toUpperCase();
+        const rowIns = (row.insNo || "").trim();
+        const rowVReg = (row.vRegNo || "").trim().toUpperCase();
+
+        if (
+          cleanLicense &&
+          rowLic &&
+          (rowLic === cleanLicense || normalizeLicense(rowLic) === normalizeLicense(cleanLicense))
+        ) {
+          duplicates.licenseNumber = "Already registered";
+        }
+        if (
+          cleanInsurance &&
+          rowIns &&
+          (rowIns.toLowerCase() === cleanInsurance.toLowerCase() ||
+            rowIns.replace(/[\s\/-]/g, "").toLowerCase() ===
+              cleanInsurance.replace(/[\s\/-]/g, "").toLowerCase())
+        ) {
+          duplicates.insurancePolicyNumber = "Already registered";
+        }
+        if (
+          cleanVehicle &&
+          rowVReg &&
+          (rowVReg === cleanVehicle || normalizeVehicle(rowVReg) === normalizeVehicle(cleanVehicle))
+        ) {
+          duplicates.vehicleNumber = "Already registered";
+        }
+      }
+    }
+
+    return duplicates;
+  } catch (err) {
+    console.error("Database error in checkExistingRecordsDao:", err.message);
+    throw err;
+  }
+};
+
+/**
  * Check if a driver with the given NIC or phone number already exists.
  */
 exports.checkDriverExists = async (nic, phone) => {
@@ -573,7 +735,7 @@ exports.registerDriverDao = async (data) => {
         claimStatus,
         onlineStatus,
         createdAt
-      ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NOW())
+      ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NOW())
     `;
 
     const officerParams = [
