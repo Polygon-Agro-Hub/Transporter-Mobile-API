@@ -427,6 +427,53 @@ router.post('/upload-doc', upload.single('file'), userAuthEp.uploadRegistrationD
 
 /**
  * @openapi
+ * /api/auth/check-existing:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Check Existing Records
+ *     description: Check database for already registered phone numbers, email, NIC, license ID, insurance policy number, or vehicle registration number.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               phone1:
+ *                 type: string
+ *               phone2:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               nic:
+ *                 type: string
+ *               licenseNumber:
+ *                 type: string
+ *               insurancePolicyNumber:
+ *                 type: string
+ *               vehicleNumber:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Check completed successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 hasDuplicates:
+ *                   type: boolean
+ *                 duplicates:
+ *                   type: object
+ */
+router.post('/check-existing', userAuthEp.checkExistingRecords);
+
+/**
+ * @openapi
  * /api/auth/register-driver:
  *   post:
  *     tags:
