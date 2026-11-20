@@ -14,6 +14,7 @@ jest.mock('../../dao/userAuth-dao', () => ({
   updateProfileImage: jest.fn(),
   getEarnings: jest.fn(),
   getEarningsHistory: jest.fn(),
+  getOfficerDetailsDao: jest.fn(),
 }));
 
 // Mock express response
@@ -101,6 +102,7 @@ describe('User Authentication Endpoints', () => {
           empId: 'USR123',
           id: 1,
           token: 'mocked_token',
+          refreshToken: 'mocked_token',
           passwordUpdated: 1,
           firstNameEnglish: 'John',
           lastNameEnglish: 'Doe',
@@ -434,6 +436,62 @@ describe('User Authentication Endpoints', () => {
         success: false,
         status: 'error',
         message: 'Failed to fetch earnings history: DAO Error'
+      });
+    });
+  });
+
+  describe('refreshToken', () => {
+    it('should return 400 if refreshToken is missing', async () => {
+      req = mockRequest({});
+      await userAuthEp.refreshToken(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        message: 'Refresh token is required',
+      });
+    });
+
+    it('should return 401 if refreshToken is invalid or expired', async () => {
+      req = mockRequest({ refreshToken: 'invalid_token' });
+      jwt.verify.mockImplementation(() => {
+        throw new Error('jwt expired');
+      });
+
+      await userAuthEp.refreshToken(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        message: 'Invalid or expired refresh token',
+      });
+    });
+
+    it('should return 200 with new tokens on valid refreshToken', async () => {
+      req = mockRequest({ refreshToken: 'valid_refresh_token' });
+      jwt.verify.mockReturnValue({ id: 1, empId: 'DRV001', passwordUpdated: 1 });
+      userDao.getOfficerDetailsDao.mockResolvedValue({
+        id: 1,
+        empId: 'DRV001',
+        status: 'Approved',
+        passwordUpdated: 1,
+        jobRole: 'Light Weight Driver',
+      });
+      jwt.sign.mockReturnValue('new_mocked_token');
+
+      await userAuthEp.refreshToken(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Token refreshed successfully',
+        data: {
+          token: 'new_mocked_token',
+          refreshToken: 'new_mocked_token',
+          empId: 'DRV001',
+          id: 1,
+          jobRole: 'Light Weight Driver',
+        },
       });
     });
   });
