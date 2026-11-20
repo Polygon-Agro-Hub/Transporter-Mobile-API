@@ -26,7 +26,13 @@ exports.login = asyncHandler(async (req, res) => {
   try {
     const result = await userDao.loginUser(empId, password);
 
-    // Define JWT payload
+    const JWT_REFRESH_SECRET =
+      process.env.JWT_REFRESH_SECRET ||
+      `${process.env.JWT_SECRET}_refresh_secret`;
+    const ACCESS_TOKEN_EXPIRY = process.env.JWT_ACCESS_EXPIRY || "12h";
+    const REFRESH_TOKEN_EXPIRY = process.env.JWT_REFRESH_EXPIRY || "12h";
+
+    // Define JWT access token payload
     const payload = {
       empId: result.empId,
       id: result.id,
@@ -35,9 +41,23 @@ exports.login = asyncHandler(async (req, res) => {
       iat: Math.floor(Date.now() / 1000),
     };
 
-    // Create JWT token
+    // Create JWT access token
     const token = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: "8h",
+      expiresIn: ACCESS_TOKEN_EXPIRY,
+    });
+
+    // Define JWT refresh token payload
+    const refreshPayload = {
+      empId: result.empId,
+      id: result.id,
+      passwordUpdated: result.passwordUpdated,
+      tokenType: "refresh",
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    // Create JWT refresh token
+    const refreshToken = jwt.sign(refreshPayload, JWT_REFRESH_SECRET, {
+      expiresIn: REFRESH_TOKEN_EXPIRY,
     });
 
     // Send token as HTTP-only cookie (more secure)
@@ -45,14 +65,14 @@ exports.login = asyncHandler(async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
-      maxAge: 8 * 60 * 60 * 1000,
+      maxAge: 12 * 60 * 60 * 1000,
     });
 
     // Sync in-memory cache with fresh DB state for active session & socket
     const officerStatusCache = require("../services/officer-status-cache");
     officerStatusCache.setOfficerStatus(result.id, OFFICER_STATUS.APPROVED);
 
-    // Send response with token
+    // Send response with access token and refresh token
     return res.status(200).json({
       success: true,
       message: "Login successful",
@@ -60,6 +80,7 @@ exports.login = asyncHandler(async (req, res) => {
         empId: result.empId,
         id: result.id,
         token,
+        refreshToken,
         passwordUpdated: result.passwordUpdated,
         firstNameEnglish: result.firstNameEnglish,
         lastNameEnglish: result.lastNameEnglish,
@@ -534,6 +555,153 @@ exports.registerDriver = asyncHandler(async (req, res) => {
       success: false,
       message: "Failed to submit driver registration. Please try again.",
       error: err.message,
+    });
+  }
+});
+
+// Refresh Token Handler
+exports.refreshToken = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body;
+
+  if (!refreshToken) {
+    return res.status(400).json({
+      success: false,
+      message: "Refresh token is required",
+    });
+  }
+
+  const JWT_REFRESH_SECRET =
+    process.env.JWT_REFRESH_SECRET ||
+    `${process.env.JWT_SECRET}_refresh_secret`;
+
+  let decoded;
+  try {
+    decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+  } catch (err) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired refresh token",
+    });
+  }
+
+  if (!decoded || !decoded.id) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid refresh token payload",
+    });
+  }
+
+  const officerId = decoded.id;
+
+  // 1. In-memory cache check: fast-reject if driver is known to be rejected or not approved
+  const officerStatusCache = require("../services/officer-status-cache");
+  if (officerStatusCache.isRejected(officerId)) {
+    return res.status(403).json({
+      success: false,
+      message: "This Employee ID is rejected",
+      status: OFFICER_STATUS.REJECTED,
+      statusType: "rejected",
+    });
+  }
+
+  if (officerStatusCache.isNotApproved(officerId)) {
+    return res.status(403).json({
+      success: false,
+      message: "This Employee ID is not approved",
+      status: OFFICER_STATUS.NOT_APPROVED,
+      statusType: "not_approved",
+    });
+  }
+
+  // 2. Fetch fresh user details from DB
+  try {
+    const user = await userDao.getOfficerDetailsDao({ id: officerId });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Verify account status
+    if (user.status === OFFICER_STATUS.REJECTED) {
+      officerStatusCache.setOfficerStatus(officerId, OFFICER_STATUS.REJECTED);
+      return res.status(403).json({
+        success: false,
+        message: "This Employee ID is rejected",
+        status: OFFICER_STATUS.REJECTED,
+        statusType: "rejected",
+      });
+    }
+
+    if (user.status !== OFFICER_STATUS.APPROVED) {
+      officerStatusCache.setOfficerStatus(officerId, OFFICER_STATUS.NOT_APPROVED);
+      return res.status(403).json({
+        success: false,
+        message: "This Employee ID is not approved",
+        status: OFFICER_STATUS.NOT_APPROVED,
+        statusType: "not_approved",
+      });
+    }
+
+    // Invalidate if password changed after refresh token was issued
+    if (
+      decoded.passwordUpdated !== undefined &&
+      user.passwordUpdated !== undefined &&
+      decoded.passwordUpdated !== user.passwordUpdated
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Password has changed. Please log in again.",
+      });
+    }
+
+    // Fast-approve cache
+    officerStatusCache.setOfficerStatus(officerId, OFFICER_STATUS.APPROVED);
+
+    const ACCESS_TOKEN_EXPIRY = process.env.JWT_ACCESS_EXPIRY || "12h";
+    const REFRESH_TOKEN_EXPIRY = process.env.JWT_REFRESH_EXPIRY || "12h";
+
+    const accessPayload = {
+      empId: user.empId,
+      id: user.id,
+      jobRole: user.jobRole,
+      passwordUpdated: user.passwordUpdated,
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    const refreshPayload = {
+      empId: user.empId,
+      id: user.id,
+      passwordUpdated: user.passwordUpdated,
+      tokenType: "refresh",
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    const newAccessToken = jwt.sign(accessPayload, process.env.JWT_SECRET, {
+      expiresIn: ACCESS_TOKEN_EXPIRY,
+    });
+
+    const newRefreshToken = jwt.sign(refreshPayload, JWT_REFRESH_SECRET, {
+      expiresIn: REFRESH_TOKEN_EXPIRY,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Token refreshed successfully",
+      data: {
+        token: newAccessToken,
+        refreshToken: newRefreshToken,
+        empId: user.empId,
+        id: user.id,
+        jobRole: user.jobRole,
+      },
+    });
+  } catch (dbErr) {
+    console.error("Database error in refreshToken:", dbErr.message);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error while refreshing token",
     });
   }
 });
