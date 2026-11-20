@@ -9,6 +9,11 @@ const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
 const { OFFICER_STATUS } = require("../constants/officer-status");
 
+// Token Expiration Durations (Edit token lifetimes here)
+const ACCESS_TOKEN_EXPIRY = "12h";
+const REFRESH_TOKEN_EXPIRY = "14d";
+const COOKIE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days in milliseconds
+
 // Login User
 exports.login = asyncHandler(async (req, res) => {
   const { error } = loginSchema.validate(req.body, { abortEarly: false });
@@ -29,8 +34,6 @@ exports.login = asyncHandler(async (req, res) => {
     const JWT_REFRESH_SECRET =
       process.env.JWT_REFRESH_SECRET ||
       `${process.env.JWT_SECRET}_refresh_secret`;
-    const ACCESS_TOKEN_EXPIRY = process.env.JWT_ACCESS_EXPIRY || "12h";
-    const REFRESH_TOKEN_EXPIRY = process.env.JWT_REFRESH_EXPIRY || "12h";
 
     // Define JWT access token payload
     const payload = {
@@ -65,7 +68,7 @@ exports.login = asyncHandler(async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
-      maxAge: 12 * 60 * 60 * 1000,
+      maxAge: COOKIE_MAX_AGE_MS,
     });
 
     // Sync in-memory cache with fresh DB state for active session & socket
@@ -658,9 +661,6 @@ exports.refreshToken = asyncHandler(async (req, res) => {
 
     // Fast-approve cache
     officerStatusCache.setOfficerStatus(officerId, OFFICER_STATUS.APPROVED);
-
-    const ACCESS_TOKEN_EXPIRY = process.env.JWT_ACCESS_EXPIRY || "12h";
-    const REFRESH_TOKEN_EXPIRY = process.env.JWT_REFRESH_EXPIRY || "12h";
 
     const accessPayload = {
       empId: user.empId,
