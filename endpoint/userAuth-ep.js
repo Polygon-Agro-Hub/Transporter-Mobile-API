@@ -4,10 +4,17 @@ const {
   loginSchema,
   changePasswordSchema,
   registerDriverSchema,
+  refreshTokenSchema,
 } = require("../validations/userAuth-validations");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
 const { OFFICER_STATUS } = require("../constants/officer-status");
+
+// Token Expiration Durations (Edit token lifetimes here)
+const ACCESS_TOKEN_EXPIRY = "16h";
+const REFRESH_TOKEN_EXPIRY = "14d";
+const ACCESS_COOKIE_MAX_AGE_MS = 16 * 60 * 60 * 1000; // 16 hours in milliseconds
+const REFRESH_COOKIE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days in milliseconds
 
 // Login User
 exports.login = asyncHandler(async (req, res) => {
@@ -26,7 +33,10 @@ exports.login = asyncHandler(async (req, res) => {
   try {
     const result = await userDao.loginUser(empId, password);
 
-    // Define JWT payload
+    const refreshSecret =
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+
+    // Define JWT access token payload
     const payload = {
       empId: result.empId,
       id: result.id,
@@ -35,24 +45,46 @@ exports.login = asyncHandler(async (req, res) => {
       iat: Math.floor(Date.now() / 1000),
     };
 
-    // Create JWT token
+    // Create JWT access token
     const token = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: "8h",
+      expiresIn: ACCESS_TOKEN_EXPIRY,
     });
 
-    // Send token as HTTP-only cookie (more secure)
+    // Define JWT refresh token payload
+    const refreshPayload = {
+      empId: result.empId,
+      id: result.id,
+      passwordUpdated: result.passwordUpdated,
+      tokenType: "refresh",
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    // Create JWT refresh token
+    const refreshToken = jwt.sign(refreshPayload, refreshSecret, {
+      expiresIn: REFRESH_TOKEN_EXPIRY,
+    });
+
+    // Send access token as HTTP-only cookie
     res.cookie("authToken", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
-      maxAge: 8 * 60 * 60 * 1000,
+      maxAge: ACCESS_COOKIE_MAX_AGE_MS,
+    });
+
+    // Send refresh token as HTTP-only cookie (same as Sales Dash)
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      maxAge: REFRESH_COOKIE_MAX_AGE_MS,
     });
 
     // Sync in-memory cache with fresh DB state for active session & socket
     const officerStatusCache = require("../services/officer-status-cache");
     officerStatusCache.setOfficerStatus(result.id, OFFICER_STATUS.APPROVED);
 
-    // Send response with token
+    // Send response with access token and refresh token
     return res.status(200).json({
       success: true,
       message: "Login successful",
@@ -60,6 +92,7 @@ exports.login = asyncHandler(async (req, res) => {
         empId: result.empId,
         id: result.id,
         token,
+        refreshToken,
         passwordUpdated: result.passwordUpdated,
         firstNameEnglish: result.firstNameEnglish,
         lastNameEnglish: result.lastNameEnglish,
@@ -452,6 +485,17 @@ exports.uploadRegistrationDoc = asyncHandler(async (req, res) => {
   }
 });
 
+// Check for existing records in DB (phone1, phone2, email, nic, license, insurance, vehicle)
+exports.checkExistingRecords = asyncHandler(async (req, res) => {
+  const duplicates = await userDao.checkExistingRecordsDao(req.body || {});
+  const hasDuplicates = Object.keys(duplicates).length > 0;
+  return res.status(200).json({
+    success: true,
+    hasDuplicates,
+    duplicates,
+  });
+});
+
 // Register New Driver Application
 exports.registerDriver = asyncHandler(async (req, res) => {
   const { error } = registerDriverSchema.validate(req.body, { abortEarly: false });
@@ -464,24 +508,45 @@ exports.registerDriver = asyncHandler(async (req, res) => {
   }
 
   const { personal } = req.body;
-  const cleanPhone = (personal.phone1 || "").replace(/\s+/g, "");
+  const cleanPhone = (personal.phone1 || "").replace(/\s+/g, "").replace(/^0+/, "");
+  const cleanPhone2 = (personal.phone2 || "").replace(/\s+/g, "").replace(/^0+/, "");
   const cleanNic = (personal.nic || "").trim().toUpperCase();
 
-  // Check if NIC or Phone is already registered
-  const existing = await userDao.checkDriverExists(cleanNic, cleanPhone);
-  if (existing) {
-    if (existing.nic === cleanNic) {
-      return res.status(400).json({
-        success: false,
-        message: "An account with this National Identity Card (NIC) is already registered.",
-      });
-    }
-    if (existing.phoneNumber01 === cleanPhone) {
-      return res.status(400).json({
-        success: false,
-        message: "An account with this phone number is already registered.",
-      });
-    }
+  if (cleanPhone2 && cleanPhone && cleanPhone2 === cleanPhone) {
+    return res.status(400).json({
+      success: false,
+      message: "Phone Number 2 cannot be the same as Phone Number 1",
+    });
+  }
+
+  // Check for any duplicate records in DB (phone1, phone2, email, nic, licenseNumber, insurancePolicyNumber, vehicleNumber)
+  const duplicates = await userDao.checkExistingRecordsDao({
+    phone1: personal.phone1,
+    phone2: personal.phone2,
+    email: personal.email,
+    nic: personal.nic,
+    licenseNumber: req.body.license?.licenseNumber,
+    insurancePolicyNumber: req.body.insurance?.insurancePolicyNumber,
+    vehicleNumber: req.body.vehicle?.vehicleNumber,
+  });
+
+  if (Object.keys(duplicates).length > 0) {
+    const fieldLabels = {
+      phone1: "Phone Number 1",
+      phone2: "Phone Number 2",
+      email: "Email Address",
+      nic: "National Identity Card (NIC)",
+      licenseNumber: "Driving License ID",
+      insurancePolicyNumber: "Insurance Policy Number",
+      vehicleNumber: "Vehicle Registration Number",
+    };
+    const firstKey = Object.keys(duplicates)[0];
+    const label = fieldLabels[firstKey] || firstKey;
+    return res.status(400).json({
+      success: false,
+      message: `${label} is already registered.`,
+      duplicates,
+    });
   }
 
   try {
@@ -502,6 +567,165 @@ exports.registerDriver = asyncHandler(async (req, res) => {
       success: false,
       message: "Failed to submit driver registration. Please try again.",
       error: err.message,
+    });
+  }
+});
+
+// Refresh Token Handler
+exports.refreshToken = asyncHandler(async (req, res) => {
+  const { error } = refreshTokenSchema.validate(req.body, { abortEarly: false });
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      message: "Refresh token is required",
+      errors: error.details.map((err) => err.message),
+    });
+  }
+
+  const { refreshToken } = req.body;
+  const refreshSecret =
+    process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+
+  let decoded;
+  try {
+    decoded = jwt.verify(refreshToken, refreshSecret);
+  } catch (err) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired refresh token",
+    });
+  }
+
+  if (!decoded || !decoded.id || decoded.tokenType !== "refresh") {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid refresh token payload",
+    });
+  }
+
+  const officerId = decoded.id;
+
+  // 1. In-memory cache check: fast-reject if driver is known to be rejected or not approved
+  const officerStatusCache = require("../services/officer-status-cache");
+  if (officerStatusCache.isRejected(officerId)) {
+    return res.status(403).json({
+      success: false,
+      message: "This Employee ID is rejected",
+      status: OFFICER_STATUS.REJECTED,
+      statusType: "rejected",
+    });
+  }
+
+  if (officerStatusCache.isNotApproved(officerId)) {
+    return res.status(403).json({
+      success: false,
+      message: "This Employee ID is not approved",
+      status: OFFICER_STATUS.NOT_APPROVED,
+      statusType: "not_approved",
+    });
+  }
+
+  // 2. Fetch fresh user details from DB
+  try {
+    const user = await userDao.getOfficerDetailsDao({ id: officerId });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Verify account status
+    if (user.status === OFFICER_STATUS.REJECTED) {
+      officerStatusCache.setOfficerStatus(officerId, OFFICER_STATUS.REJECTED);
+      return res.status(403).json({
+        success: false,
+        message: "This Employee ID is rejected",
+        status: OFFICER_STATUS.REJECTED,
+        statusType: "rejected",
+      });
+    }
+
+    if (user.status !== OFFICER_STATUS.APPROVED) {
+      officerStatusCache.setOfficerStatus(officerId, OFFICER_STATUS.NOT_APPROVED);
+      return res.status(403).json({
+        success: false,
+        message: "This Employee ID is not approved",
+        status: OFFICER_STATUS.NOT_APPROVED,
+        statusType: "not_approved",
+      });
+    }
+
+    // Invalidate if password changed after refresh token was issued
+    if (
+      decoded.passwordUpdated !== undefined &&
+      user.passwordUpdated !== undefined &&
+      decoded.passwordUpdated !== user.passwordUpdated
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Password has changed. Please log in again.",
+      });
+    }
+
+    // Fast-approve cache
+    officerStatusCache.setOfficerStatus(officerId, OFFICER_STATUS.APPROVED);
+
+    const accessPayload = {
+      empId: user.empId,
+      id: user.id,
+      jobRole: user.jobRole,
+      passwordUpdated: user.passwordUpdated,
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    const refreshPayload = {
+      empId: user.empId,
+      id: user.id,
+      passwordUpdated: user.passwordUpdated,
+      tokenType: "refresh",
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    const newAccessToken = jwt.sign(accessPayload, process.env.JWT_SECRET, {
+      expiresIn: ACCESS_TOKEN_EXPIRY,
+    });
+
+    const newRefreshToken = jwt.sign(refreshPayload, refreshSecret, {
+      expiresIn: REFRESH_TOKEN_EXPIRY,
+    });
+
+    // Send refreshed cookies (same as Sales Dash)
+    res.cookie("authToken", newAccessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      maxAge: ACCESS_COOKIE_MAX_AGE_MS,
+    });
+
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      maxAge: REFRESH_COOKIE_MAX_AGE_MS,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Token refreshed successfully",
+      data: {
+        token: newAccessToken,
+        refreshToken: newRefreshToken,
+        empId: user.empId,
+        id: user.id,
+        jobRole: user.jobRole,
+      },
+    });
+  } catch (dbErr) {
+    console.error("Database error in refreshToken:", dbErr.message);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error while refreshing token",
     });
   }
 });

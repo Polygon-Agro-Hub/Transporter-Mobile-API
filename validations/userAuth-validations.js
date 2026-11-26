@@ -26,16 +26,43 @@ const changePasswordSchema = Joi.object({
 // Register Driver Schema
 const registerDriverSchema = Joi.object({
   personal: Joi.object({
-    firstName: Joi.string().trim().required().messages({
-      "string.empty": "First name is required",
-    }),
-    lastName: Joi.string().trim().required().messages({
-      "string.empty": "Last name is required",
-    }),
+    firstName: Joi.string()
+      .trim()
+      .pattern(/^[A-Za-z ]+$/)
+      .required()
+      .messages({
+        "string.empty": "First name is required",
+        "string.pattern.base": "Only letters and spaces between words are allowed in first name",
+      }),
+    lastName: Joi.string()
+      .trim()
+      .pattern(/^[A-Za-z ]+$/)
+      .required()
+      .messages({
+        "string.empty": "Last name is required",
+        "string.pattern.base": "Only letters and spaces between words are allowed in last name",
+      }),
     phone1: Joi.string().trim().required().messages({
-      "string.empty": "Primary phone number is required",
+      "string.empty": "Phone Number 1 is required",
+      "any.required": "Phone Number 1 is required",
     }),
-    phone2: Joi.string().trim().allow("", null).optional(),
+    phone2: Joi.string()
+      .trim()
+      .allow("", null)
+      .optional()
+      .custom((value, helpers) => {
+        if (!value) return value;
+        const phone1 = helpers.state.ancestors[0]?.phone1;
+        const clean1 = (phone1 || "").replace(/\s+/g, "").replace(/^0+/, "");
+        const clean2 = value.replace(/\s+/g, "").replace(/^0+/, "");
+        if (clean1 && clean2 && clean1 === clean2) {
+          return helpers.error("phone2.duplicate");
+        }
+        return value;
+      })
+      .messages({
+        "phone2.duplicate": "Phone Number 2 cannot be the same as Phone Number 1",
+      }),
     nic: Joi.string().trim().required().messages({
       "string.empty": "National Identity Card (NIC) is required",
     }),
@@ -63,9 +90,16 @@ const registerDriverSchema = Joi.object({
     country: Joi.string().trim().default("Sri Lanka"),
   }).required(),
   bank: Joi.object({
-    bankAccountHolder: Joi.string().trim().required().messages({
-      "string.empty": "Account holder name is required",
-    }),
+    bankAccountHolder: Joi.string()
+      .trim()
+      .pattern(/^[A-Za-z ]+$/)
+      .required()
+      .messages({
+        "string.empty": "Account holder's name is required",
+        "any.required": "Account holder's name is required",
+        "string.pattern.base":
+          "Only letters and spaces between words are allowed in account holder's name",
+      }),
     bankAccountNumber: Joi.string().trim().required().messages({
       "string.empty": "Account number is required",
     }),
@@ -87,7 +121,7 @@ const registerDriverSchema = Joi.object({
         if (value.length < 7) {
           return helpers.error("string.min");
         }
-        if (value.length > 9) {
+        if (value.length > 10) {
           return helpers.error("string.max");
         }
         if (/[a-z]/.test(value)) {
@@ -100,7 +134,7 @@ const registerDriverSchema = Joi.object({
         "any.required": "Driving license ID is required",
         "license.spaces": "Spaces are not allowed in driving license ID",
         "string.min": "Driving license ID must be at least 7 characters",
-        "string.max": "Driving license ID must be at most 9 characters",
+        "string.max": "Driving license ID must be at most 10 characters",
         "license.uppercase": "Driving license ID must use English uppercase letters",
       }),
     licenseFrontPhoto: Joi.string().allow("", null).optional(),
@@ -178,8 +212,17 @@ const registerDriverSchema = Joi.object({
   }).required(),
 });
 
+// Refresh Token Schema
+const refreshTokenSchema = Joi.object({
+  refreshToken: Joi.string().trim().required().messages({
+    "string.empty": "Refresh token is required",
+    "any.required": "Refresh token is required",
+  }),
+});
+
 module.exports = {
   loginSchema,
   changePasswordSchema,
   registerDriverSchema,
+  refreshTokenSchema,
 };
