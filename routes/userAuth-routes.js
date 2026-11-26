@@ -109,6 +109,62 @@ router.post('/login', loginRateLimiter, userAuthEp.login);
 
 /**
  * @openapi
+ * /api/auth/refresh-token:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Refresh Access Token
+ *     description: Issue a new access token and rotated refresh token using a valid refresh token.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - refreshToken
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: New access and refresh tokens returned successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Token refreshed successfully"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     token:
+ *                       type: string
+ *                     refreshToken:
+ *                       type: string
+ *                     empId:
+ *                       type: string
+ *                     id:
+ *                       type: integer
+ *                     jobRole:
+ *                       type: string
+ *       400:
+ *         description: Missing refresh token.
+ *       401:
+ *         description: Invalid or expired refresh token.
+ *       403:
+ *         description: Account is rejected or not approved.
+ */
+router.post('/refresh-token', userAuthEp.refreshToken);
+
+/**
+ * @openapi
  * /api/auth/change-password:
  *   post:
  *     tags:
