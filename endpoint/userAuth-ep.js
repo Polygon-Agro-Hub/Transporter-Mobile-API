@@ -4,15 +4,17 @@ const {
   loginSchema,
   changePasswordSchema,
   registerDriverSchema,
+  refreshTokenSchema,
 } = require("../validations/userAuth-validations");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
 const { OFFICER_STATUS } = require("../constants/officer-status");
 
 // Token Expiration Durations (Edit token lifetimes here)
-const ACCESS_TOKEN_EXPIRY = "12h";
+const ACCESS_TOKEN_EXPIRY = "16h";
 const REFRESH_TOKEN_EXPIRY = "14d";
-const COOKIE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days in milliseconds
+const ACCESS_COOKIE_MAX_AGE_MS = 16 * 60 * 60 * 1000; // 16 hours in milliseconds
+const REFRESH_COOKIE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days in milliseconds
 
 // Login User
 exports.login = asyncHandler(async (req, res) => {
@@ -31,9 +33,8 @@ exports.login = asyncHandler(async (req, res) => {
   try {
     const result = await userDao.loginUser(empId, password);
 
-    const JWT_REFRESH_SECRET =
-      process.env.JWT_REFRESH_SECRET ||
-      `${process.env.JWT_SECRET}_refresh_secret`;
+    const refreshSecret =
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
 
     // Define JWT access token payload
     const payload = {
@@ -59,16 +60,24 @@ exports.login = asyncHandler(async (req, res) => {
     };
 
     // Create JWT refresh token
-    const refreshToken = jwt.sign(refreshPayload, JWT_REFRESH_SECRET, {
+    const refreshToken = jwt.sign(refreshPayload, refreshSecret, {
       expiresIn: REFRESH_TOKEN_EXPIRY,
     });
 
-    // Send token as HTTP-only cookie (more secure)
+    // Send access token as HTTP-only cookie
     res.cookie("authToken", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Strict",
-      maxAge: COOKIE_MAX_AGE_MS,
+      maxAge: ACCESS_COOKIE_MAX_AGE_MS,
+    });
+
+    // Send refresh token as HTTP-only cookie (same as Sales Dash)
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      maxAge: REFRESH_COOKIE_MAX_AGE_MS,
     });
 
     // Sync in-memory cache with fresh DB state for active session & socket
@@ -564,22 +573,22 @@ exports.registerDriver = asyncHandler(async (req, res) => {
 
 // Refresh Token Handler
 exports.refreshToken = asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body;
-
-  if (!refreshToken) {
+  const { error } = refreshTokenSchema.validate(req.body, { abortEarly: false });
+  if (error) {
     return res.status(400).json({
       success: false,
       message: "Refresh token is required",
+      errors: error.details.map((err) => err.message),
     });
   }
 
-  const JWT_REFRESH_SECRET =
-    process.env.JWT_REFRESH_SECRET ||
-    `${process.env.JWT_SECRET}_refresh_secret`;
+  const { refreshToken } = req.body;
+  const refreshSecret =
+    process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
 
   let decoded;
   try {
-    decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+    decoded = jwt.verify(refreshToken, refreshSecret);
   } catch (err) {
     return res.status(401).json({
       success: false,
@@ -587,7 +596,7 @@ exports.refreshToken = asyncHandler(async (req, res) => {
     });
   }
 
-  if (!decoded || !decoded.id) {
+  if (!decoded || !decoded.id || decoded.tokenType !== "refresh") {
     return res.status(401).json({
       success: false,
       message: "Invalid refresh token payload",
@@ -682,8 +691,23 @@ exports.refreshToken = asyncHandler(async (req, res) => {
       expiresIn: ACCESS_TOKEN_EXPIRY,
     });
 
-    const newRefreshToken = jwt.sign(refreshPayload, JWT_REFRESH_SECRET, {
+    const newRefreshToken = jwt.sign(refreshPayload, refreshSecret, {
       expiresIn: REFRESH_TOKEN_EXPIRY,
+    });
+
+    // Send refreshed cookies (same as Sales Dash)
+    res.cookie("authToken", newAccessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      maxAge: ACCESS_COOKIE_MAX_AGE_MS,
+    });
+
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      maxAge: REFRESH_COOKIE_MAX_AGE_MS,
     });
 
     return res.status(200).json({

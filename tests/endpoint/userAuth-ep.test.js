@@ -446,10 +446,12 @@ describe('User Authentication Endpoints', () => {
       await userAuthEp.refreshToken(req, res);
 
       expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith({
-        success: false,
-        message: 'Refresh token is required',
-      });
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          message: 'Refresh token is required',
+        }),
+      );
     });
 
     it('should return 401 if refreshToken is invalid or expired', async () => {
@@ -469,7 +471,7 @@ describe('User Authentication Endpoints', () => {
 
     it('should return 200 with new tokens on valid refreshToken', async () => {
       req = mockRequest({ refreshToken: 'valid_refresh_token' });
-      jwt.verify.mockReturnValue({ id: 1, empId: 'DRV001', passwordUpdated: 1 });
+      jwt.verify.mockReturnValue({ id: 1, empId: 'DRV001', passwordUpdated: 1, tokenType: 'refresh' });
       userDao.getOfficerDetailsDao.mockResolvedValue({
         id: 1,
         empId: 'DRV001',
