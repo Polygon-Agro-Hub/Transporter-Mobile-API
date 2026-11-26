@@ -468,7 +468,7 @@ exports.getDisallowedOfficersDao = async () => {
  */
 exports.getOfficerDetailsDao = async ({ id, empId } = {}) => {
   try {
-    let sql = "SELECT id, empId, status, firstNameEnglish, lastNameEnglish FROM collectionofficer WHERE ";
+    let sql = "SELECT id, empId, status, firstNameEnglish, lastNameEnglish, jobRole, passwordUpdated FROM collectionofficer WHERE ";
     const params = [];
 
     if (id) {

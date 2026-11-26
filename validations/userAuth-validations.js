@@ -212,8 +212,17 @@ const registerDriverSchema = Joi.object({
   }).required(),
 });
 
+// Refresh Token Schema
+const refreshTokenSchema = Joi.object({
+  refreshToken: Joi.string().trim().required().messages({
+    "string.empty": "Refresh token is required",
+    "any.required": "Refresh token is required",
+  }),
+});
+
 module.exports = {
   loginSchema,
   changePasswordSchema,
   registerDriverSchema,
+  refreshTokenSchema,
 };
